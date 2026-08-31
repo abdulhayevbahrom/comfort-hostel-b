@@ -2,6 +2,7 @@ import mongoose from 'mongoose'
 import { Employee } from '../models/Employee.js'
 import { Room } from '../models/Room.js'
 import { hashPassword, validatePassword } from '../utils/bcrypt.js'
+import { faceIdCodeExists, isValidFaceIdCode, normalizeFaceIdCode } from '../utils/faceIdCode.js'
 import { ApiResponse } from '../utils/response.js'
 
 class EmployeeController {
@@ -33,7 +34,16 @@ class EmployeeController {
     }
 
     if (body.faceAccessEnabled !== undefined) payload.faceAccessEnabled = body.faceAccessEnabled === true
+    const faceIdCode = normalizeFaceIdCode(body.faceIdCode)
+    if (faceIdCode) payload.faceIdCode = faceIdCode
     return payload
+  }
+
+  validateFaceIdCode = async (payload, res, employeeId) => {
+    if (!payload.faceIdCode) return null
+    if (!isValidFaceIdCode(payload.faceIdCode)) return ApiResponse.badRequest(res, 'FaceID kodi 1–32 ta harf va raqamdan iborat bo‘lishi kerak')
+    if (await faceIdCodeExists(payload.faceIdCode, { employeeId })) return ApiResponse.conflict(res, 'Bu FaceID kodi boshqa talaba yoki xodimga biriktirilgan')
+    return null
   }
 
   validateRooms = async (payload) => {
@@ -82,6 +92,7 @@ class EmployeeController {
   create = async (req, res, next) => {
     try {
       const payload = this.cleanPayload(req.body)
+      if (await this.validateFaceIdCode(payload, res)) return undefined
       if (!(await this.validateRooms(payload))) return ApiResponse.badRequest(res, 'Tanlangan xonalardan biri topilmadi')
       if (payload.canLogin) {
         if (!payload.login) return ApiResponse.badRequest(res, 'Login kiritilishi shart')
@@ -101,6 +112,7 @@ class EmployeeController {
     try {
       if (!mongoose.isValidObjectId(req.params.id)) return ApiResponse.notFound(res, 'Xodim topilmadi')
       const payload = this.cleanPayload(req.body)
+      if (await this.validateFaceIdCode(payload, res, req.params.id)) return undefined
       if (!(await this.validateRooms(payload))) return ApiResponse.badRequest(res, 'Tanlangan xonalardan biri topilmadi')
       if (payload.canLogin && !payload.login) return ApiResponse.badRequest(res, 'Login kiritilishi shart')
       if (payload.canLogin && req.body.password) {

@@ -67,6 +67,8 @@ app.use((error, _req, res, _next) => {
         ? 'Bu ISUP Device ID avval boshqa qurilmaga biriktirilgan'
       : error.keyPattern?.login
         ? 'Bu login avval ro‘yxatdan o‘tgan'
+        : error.keyPattern?.faceIdCode
+          ? 'Bu FaceID kodi avval boshqa shaxsga biriktirilgan'
         : error.keyPattern?.jshr
           ? 'Bu JSHR bilan talaba avval kiritilgan'
           : error.keyPattern?.passportSeries || error.keyPattern?.passportNumber

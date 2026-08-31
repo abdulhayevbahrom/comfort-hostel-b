@@ -29,7 +29,7 @@ const employeeSchema = new mongoose.Schema(
       trim: true,
       uppercase: true,
       // Hikvision Employee ID faqat harf va raqam qabul qiladi.
-      match: /^EMP[A-F0-9]{12}$/,
+      match: [/^[A-Z0-9]{1,32}$/, 'FaceID kodi 1–32 ta harf va raqamdan iborat bo‘lishi kerak'],
       unique: true,
       sparse: true,
       index: true,

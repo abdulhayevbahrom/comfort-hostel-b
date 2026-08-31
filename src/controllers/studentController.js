@@ -4,6 +4,7 @@ import { Faculty } from '../models/Faculty.js'
 import { Student } from '../models/Student.js'
 import { StudentContract } from '../models/StudentContract.js'
 import { University } from '../models/University.js'
+import { faceIdCodeExists, isValidFaceIdCode, normalizeFaceIdCode } from '../utils/faceIdCode.js'
 import { ApiResponse } from '../utils/response.js'
 import { uploadImages } from '../utils/imgbb.js'
 
@@ -39,7 +40,7 @@ class StudentController {
 
   cleanPayload(body) {
     const normalizePhone = (value) => String(value || '').replace(/\D/g, '').replace(/^998(?=\d{9}$)/, '')
-    return {
+    const payload = {
       fullName: String(body.fullName || '').trim(),
       phone: normalizePhone(body.phone),
       gender: body.gender,
@@ -66,6 +67,16 @@ class StudentController {
       zaksSeries: String(body.zaksSeries || '').trim().toUpperCase() || undefined,
       zaksNumber: String(body.zaksNumber || '').replace(/\D/g, '') || undefined,
     }
+    const faceIdCode = normalizeFaceIdCode(body.faceIdCode)
+    if (faceIdCode) payload.faceIdCode = faceIdCode
+    return payload
+  }
+
+  async validateFaceIdCode(payload, res, studentId) {
+    if (!payload.faceIdCode) return null
+    if (!isValidFaceIdCode(payload.faceIdCode)) return ApiResponse.badRequest(res, 'FaceID kodi 1–32 ta harf va raqamdan iborat bo‘lishi kerak')
+    if (await faceIdCodeExists(payload.faceIdCode, { studentId })) return ApiResponse.conflict(res, 'Bu FaceID kodi boshqa talaba yoki xodimga biriktirilgan')
+    return null
   }
 
   validateConditionalFields(payload, res) {
@@ -232,6 +243,7 @@ class StudentController {
   create = async (req, res, next) => {
     try {
       const payload = this.cleanPayload(req.body)
+      if (await this.validateFaceIdCode(payload, res)) return undefined
       if (this.validateConditionalFields(payload, res)) return undefined
       if (await this.resolveEducation(payload, req, res)) return undefined
       if (payload.disciplinaryStatus === 'blacklisted' && !payload.disciplinaryNote) return ApiResponse.badRequest(res, 'Qora ro‘yxat sababini kiriting')
@@ -256,6 +268,7 @@ class StudentController {
       const student = await Student.findById(req.params.id)
       if (!student) return ApiResponse.notFound(res, 'Talaba topilmadi')
       const payload = this.cleanPayload(req.body)
+      if (await this.validateFaceIdCode(payload, res, student.id)) return undefined
       if (this.validateConditionalFields(payload, res)) return undefined
       if (await this.resolveEducation(payload, req, res)) return undefined
       if (payload.disciplinaryStatus === 'blacklisted' && !payload.disciplinaryNote) return ApiResponse.badRequest(res, 'Qora ro‘yxat sababini kiriting')
