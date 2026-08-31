@@ -42,7 +42,11 @@ class RoomController {
     }).filter((item) => Number.isInteger(item.number) && item.number >= 1 && item.number <= 99 && ['single', 'bunk'].includes(item.type) && item.slotNumbers.every((number) => Number.isFinite(number) && number >= 1))
     const uniqueNumbers = new Set(bedLayout.map((item) => item.number))
     const slotNumbers = bedLayout.flatMap((item) => item.slotNumbers)
-    if (bedLayout.length !== rawLayout.length || uniqueNumbers.size !== bedLayout.length || new Set(slotNumbers).size !== slotNumbers.length) throw new Error('Krovat va o‘rin raqamlari takrorlanmasligi kerak')
+    if (bedLayout.length !== rawLayout.length || uniqueNumbers.size !== bedLayout.length || new Set(slotNumbers).size !== slotNumbers.length) {
+      const error = new Error('Krovat va o‘rin raqamlari takrorlanmasligi kerak')
+      error.statusCode = 400
+      throw error
+    }
     const capacity = bedLayout.length ? bedLayout.reduce((sum, item) => sum + (item.type === 'bunk' ? 2 : 1), 0) : hasBunkBeds ? bunkBedCount * 2 : Number(body.capacity)
     return {
       roomNumber: String(body.roomNumber || '').trim(),

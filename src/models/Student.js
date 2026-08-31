@@ -24,6 +24,7 @@ const studentSchema = new mongoose.Schema(
     parentPhone: { type: String, trim: true, default: '', validate: { validator: (value) => !value || /^\d{9}$/.test(value), message: 'Ota-ona telefoni 9 ta raqamdan iborat bo‘lishi kerak' } },
     depositType: { type: String, enum: ['none', 'money', 'passport'], default: 'none' },
     depositAmount: { type: Number, min: 0, default: 0 },
+    depositPaymentMethod: { type: String, enum: ['', 'cash', 'online', 'card', 'bank'], default: '' },
     depositReceivedAt: { type: Date, default: null },
     depositReturnedAt: { type: Date, default: null },
     depositReturnedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', default: null },

@@ -1,6 +1,7 @@
 import mongoose from 'mongoose'
 import { Attendance } from '../models/Attendance.js'
 import { StudentContract } from '../models/StudentContract.js'
+import { StudentStaySession } from '../models/StudentStaySession.js'
 import { ApiResponse } from '../utils/response.js'
 
 const validDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))
@@ -77,8 +78,19 @@ class AttendanceController {
       const uniqueContracts = [...new Map(contracts.filter((item) => item.student && item.room).map((item) => [item.student.id, item])).values()]
       const attendance = await Attendance.find({ attendanceDate, student: { $in: uniqueContracts.map((item) => item.student._id) } })
         .populate('markedBy', 'firstname lastname position role')
+      const dayStart = new Date(`${attendanceDate}T00:00:00.000Z`)
+      const dayEnd = new Date(`${attendanceDate}T23:59:59.999Z`)
+      const sessions = await StudentStaySession.find({ student: { $in: uniqueContracts.map((item) => item.student._id) }, entryAt: { $gte: dayStart, $lte: dayEnd } }).select('student entryAt exitAt').sort({ entryAt: 1 })
       const byStudent = new Map(attendance.map((item) => [item.student.toString(), item]))
-      let rows = uniqueContracts.map((contract) => ({ student: contract.student, room: contract.room, attendance: byStudent.get(contract.student.id) || null }))
+      const sessionsByStudent = new Map()
+      sessions.forEach((session) => {
+        const key = session.student.toString()
+        const current = sessionsByStudent.get(key) || { entryAt: null, exitAt: null }
+        if (!current.entryAt || session.entryAt < current.entryAt) current.entryAt = session.entryAt
+        if (session.exitAt && (!current.exitAt || session.exitAt > current.exitAt)) current.exitAt = session.exitAt
+        sessionsByStudent.set(key, current)
+      })
+      let rows = uniqueContracts.map((contract) => ({ student: contract.student, room: contract.room, attendance: byStudent.get(contract.student.id) || null, ...(sessionsByStudent.get(contract.student.id) || {}) }))
 
       const search = String(req.query.search || '').trim().toLowerCase()
       if (search) rows = rows.filter((row) => `${row.student.fullName} ${row.student.phone} ${row.room.block} ${row.room.roomNumber}`.toLowerCase().includes(search))

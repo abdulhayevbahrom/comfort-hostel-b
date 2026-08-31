@@ -47,6 +47,7 @@ class StudentController {
       parentPhone: normalizePhone(body.parentPhone),
       depositType: ['money', 'passport'].includes(body.depositType) ? body.depositType : 'none',
       depositAmount: Number(body.depositAmount) || 0,
+      depositPaymentMethod: body.depositType === 'money' && ['cash', 'online', 'card', 'bank'].includes(body.depositPaymentMethod) ? body.depositPaymentMethod : '',
       depositReceivedAt: body.depositReceivedAt ? new Date(body.depositReceivedAt) : null,
       university: body.university,
       faculty: body.faculty,
@@ -82,6 +83,7 @@ class StudentController {
   validateConditionalFields(payload, res) {
     if (payload.depositType !== 'none' && !payload.depositReceivedAt) return ApiResponse.badRequest(res, 'Depozit qabul qilingan sanani kiriting')
     if (payload.depositType === 'money' && (!Number.isFinite(payload.depositAmount) || payload.depositAmount <= 0)) return ApiResponse.badRequest(res, 'Pul depoziti summasini kiriting')
+    if (payload.depositType === 'money' && !payload.depositPaymentMethod) return ApiResponse.badRequest(res, 'Depozit uchun to‘lov turini tanlang')
     if (payload.hasTemporaryRegistration && (!Number.isInteger(payload.temporaryRegistrationMonths) || payload.temporaryRegistrationMonths < 1 || payload.temporaryRegistrationMonths > 12)) return ApiResponse.badRequest(res, 'Vaqtinchalik propiska muddatini 1 dan 12 oygacha kiriting')
     if (payload.hasTaxContract && !['student_contract', 'standard_contract'].includes(payload.taxContractType)) return ApiResponse.badRequest(res, 'Soliq shartnomasi turini tanlang')
     if (payload.gender === 'family' && (!payload.zaksSeries || !payload.zaksNumber)) return ApiResponse.badRequest(res, 'Oila uchun ZAKS seriyasi va raqamini kiriting')

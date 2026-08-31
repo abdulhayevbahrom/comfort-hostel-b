@@ -60,6 +60,7 @@ app.use('/api/shop', shopRouter)
 app.use((_req, res) => ApiResponse.notFound(res, 'API manzili topilmadi'))
 app.use((error, _req, res, _next) => {
   console.error(error)
+  if (error?.statusCode === 400) return ApiResponse.badRequest(res, error.message)
   if (error?.code === 11000) {
     const message = error.keyPattern?.roomNumber
       ? 'Bu bino yoki blokning shu qavatida bunday xona raqami mavjud'
