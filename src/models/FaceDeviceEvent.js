@@ -10,6 +10,7 @@ const faceDeviceEventSchema = new mongoose.Schema({
   rawEventType: { type: String, trim: true, maxlength: 120, default: '' },
   personType: { type: String, enum: ['employee', 'student', 'unknown'], default: 'unknown', index: true },
   personId: { type: mongoose.Schema.Types.ObjectId, default: null, index: true },
+  studentMovement: { type: mongoose.Schema.Types.ObjectId, ref: 'StudentMovement', default: null, index: true },
   accessDecision: { type: String, trim: true, default: 'processing', index: true },
   doorAttempted: { type: Boolean, default: false },
   doorOpened: { type: Boolean, default: false },

@@ -4,8 +4,11 @@ import { Employee } from '../models/Employee.js'
 import { EmployeeAttendance } from '../models/EmployeeAttendance.js'
 import { FaceDevice } from '../models/FaceDevice.js'
 import { FaceDeviceEvent } from '../models/FaceDeviceEvent.js'
+import { Student } from '../models/Student.js'
 import { evaluateStudentFaceAccess } from '../services/studentFaceAccess.service.js'
+import { previewStudentDirection, recordStudentMovement } from '../services/studentPresence.service.js'
 import { resolveEmployeeAttendanceDate } from '../utils/faceTime.js'
+import { getEmployeeAttendanceSettings } from '../utils/employeeSchedule.js'
 import { extractHikvisionEvent, isHeartbeatEvent } from '../utils/hikvisionEvent.js'
 import { ApiResponse } from '../utils/response.js'
 
@@ -18,8 +21,7 @@ const ipAllowed = (req, variableName) => {
   return !allowed.length || allowed.includes(remoteIp(req))
 }
 
-async function recordEmployeeAttendance(employee, device, occurredAt, deviceEvent) {
-  const schedule = employee.workSchedule || {}
+async function recordEmployeeAttendance(employee, device, occurredAt, deviceEvent, schedule) {
   const date = resolveEmployeeAttendanceDate(schedule, device.direction, occurredAt)
   let attendance = await EmployeeAttendance.findOne({ employee: employee._id, date })
   if (!attendance) {
@@ -34,11 +36,12 @@ async function recordEmployeeAttendance(employee, device, occurredAt, deviceEven
   }
   const lastMark = attendance.currentEntry || attendance.lastExit || attendance.firstEntry
   if (lastMark && (occurredAt - lastMark) / 1000 < MIN_RESCAN_SECONDS) return { action: 'duplicate', date, attendance }
-  const openSession = () => { if (!attendance.firstEntry) attendance.firstEntry = occurredAt; attendance.currentEntry = occurredAt }
+  const openSession = () => { if (!attendance.firstEntry) attendance.firstEntry = occurredAt; attendance.currentEntry = occurredAt; attendance.exitSource = null }
   const closeSession = () => {
     if (!attendance.currentEntry) return false
     attendance.totalHours += Math.max(0, occurredAt - attendance.currentEntry) / 3_600_000
     attendance.lastExit = occurredAt
+    attendance.exitSource = 'device'
     attendance.currentEntry = null
     return true
   }
@@ -106,27 +109,55 @@ class FaceDeviceController {
         return acknowledgeTerminal(res)
       }
 
-      const employee = await Employee.findOne({ faceIdCode: faceCode, isActive: true })
+      const employee = await Employee.findOne({ faceIdCode: faceCode, isActive: true, faceAccessEnabled: true })
       if (employee) {
         deviceEvent.personType = 'employee'
         deviceEvent.personId = employee._id
-        const attendance = await recordEmployeeAttendance(employee, device, occurredAt, deviceEvent)
+        const attendanceSettings = await getEmployeeAttendanceSettings()
+        if (!attendanceSettings.enabled) {
+          deviceEvent.accessDecision = 'granted'
+          await saveDeviceResult(device, deviceEvent, startedAt)
+          return acknowledgeTerminal(res)
+        }
+        const attendance = await recordEmployeeAttendance(employee, device, occurredAt, deviceEvent, attendanceSettings.schedule)
         deviceEvent.accessDecision = 'granted'
         await saveDeviceResult(device, deviceEvent, startedAt)
         req.app.get('io')?.emit('employee-attendance:changed', { employeeId: employee.id, date: attendance.date, action: attendance.action })
         return acknowledgeTerminal(res)
       }
 
+      const student = await Student.findOne({ faceIdCode: faceCode })
+      const direction = student
+        ? await previewStudentDirection(student._id, device.direction, occurredAt)
+        : device.direction
       const access = await evaluateStudentFaceAccess({
         faceIdCode: faceCode,
         eventId,
         occurredAt: occurredAt.toISOString(),
         deviceKey: device.deviceKey,
-        direction: device.direction,
-      }, { io: req.app.get('io') })
+        direction,
+      }, { io: req.app.get('io'), student })
       deviceEvent.personType = access.studentId ? 'student' : 'unknown'
       deviceEvent.personId = access.studentId || null
       deviceEvent.accessDecision = access.decision
+      if (access.studentId) {
+        const movement = await recordStudentMovement({
+          studentId: access.studentId,
+          eventId,
+          configuredDirection: direction,
+          occurredAt,
+          deviceId: device._id,
+          deviceEventId: deviceEvent._id,
+          faceAccessEventId: access.accessEventId,
+        })
+        deviceEvent.studentMovement = movement._id
+        req.app.get('io')?.emit('student-presence:changed', {
+          studentId: access.studentId,
+          direction: movement.direction,
+          transition: movement.transition,
+          occurredAt,
+        })
+      }
       await saveDeviceResult(device, deviceEvent, startedAt)
       return acknowledgeTerminal(res)
     } catch (error) {

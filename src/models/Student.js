@@ -11,7 +11,8 @@ const studentSchema = new mongoose.Schema(
       type: String,
       trim: true,
       uppercase: true,
-      match: /^STU-[A-F0-9]{12}$/,
+      // Hikvision Employee ID faqat harf va raqam qabul qiladi.
+      match: /^STU[A-F0-9]{12}$/,
       unique: true,
       sparse: true,
       index: true,
@@ -51,7 +52,7 @@ const studentSchema = new mongoose.Schema(
 )
 
 studentSchema.pre('validate', function ensureFaceIdCode() {
-  if (!this.faceIdCode && this._id) this.faceIdCode = `STU-${this._id.toString().slice(-12).toUpperCase()}`
+  if (!this.faceIdCode && this._id) this.faceIdCode = `STU${this._id.toString().slice(-12).toUpperCase()}`
 })
 
 studentSchema.index({ jshr: 1 }, { unique: true, partialFilterExpression: { jshr: { $type: 'string' } } })

@@ -36,7 +36,23 @@ test('kelgan joriy kun uchun kechikish darhol hisoblanadi', () => {
     totalHours: 0,
   }], 2026, 8, new Date('2026-08-28T10:00:00+05:00'))
   assert.equal(result.totalLateMinutes, 15)
+  assert.equal(result.totalEarlyLeaveMinutes, 0)
   assert.equal(result.deductions.lateDeduction, 15_000)
+  assert.equal(result.deductions.earlyLeaveDeduction, 0)
+})
+
+test('xodim hali ichkarida bo‘lsa erta ketish jarimasi yozilmaydi', () => {
+  const result = calculateEmployeePayroll(employee({ useTimePenalty: true, penaltyPerMinute: 1000 }), [{
+    date: '2026-08-31',
+    firstEntry: new Date('2026-08-31T12:19:00+05:00'),
+    currentEntry: new Date('2026-08-31T12:19:00+05:00'),
+    lastExit: null,
+    totalHours: 0,
+  }], 2026, 8, new Date('2026-08-31T13:00:00+05:00'))
+
+  assert.equal(result.totalEarlyLeaveMinutes, 0)
+  assert.equal(result.earlyLeaveDates.length, 0)
+  assert.equal(result.deductions.earlyLeaveDeduction, 0)
 })
 
 test('tungi smenada kechikish va erta ketish to‘g‘ri olinadi', () => {
@@ -50,4 +66,25 @@ test('tungi smenada kechikish va erta ketish to‘g‘ri olinadi', () => {
   assert.equal(result.totalEarlyLeaveMinutes, 30)
   assert.equal(result.deductions.lateDeduction, 15_000)
   assert.equal(result.deductions.earlyLeaveDeduction, 30_000)
+})
+
+test('sabab bilan bekor qilingan kun jarimasi oylikdan ushlanmaydi', () => {
+  const attendance = [{
+    date: '2026-08-28',
+    firstEntry: new Date('2026-08-28T09:20:00+05:00'),
+    lastExit: new Date('2026-08-28T17:30:00+05:00'),
+    totalHours: 8.1667,
+  }]
+  const result = calculateEmployeePayroll(
+    employee({ useTimePenalty: true, penaltyPerMinute: 1000 }),
+    attendance,
+    2026,
+    8,
+    new Date('2026-08-28T19:00:00+05:00'),
+    { waivedDates: new Set(['2026-08-28']) },
+  )
+  assert.equal(result.totalLateMinutes, 20)
+  assert.equal(result.totalEarlyLeaveMinutes, 30)
+  assert.equal(result.deductions.lateDeduction, 0)
+  assert.equal(result.deductions.earlyLeaveDeduction, 0)
 })

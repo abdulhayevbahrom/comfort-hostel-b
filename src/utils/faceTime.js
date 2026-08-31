@@ -1,6 +1,9 @@
 const TIME_ZONE = 'Asia/Tashkent'
 
 export function datePartsInTimeZone(value, timeZone = TIME_ZONE) {
+  // Chiqish hali qayd qilinmaganida `null`ni Unix epoch (1970-01-01) deb
+  // talqin qilmaslik kerak. Aks holda ochiq smenaga soxta erta ketish yoziladi.
+  if (value === null || value === undefined || value === '') return null
   const date = value instanceof Date ? value : new Date(value)
   if (Number.isNaN(date.getTime())) return null
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(date)

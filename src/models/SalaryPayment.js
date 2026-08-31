@@ -2,6 +2,7 @@ import mongoose from 'mongoose'
 
 const salaryPaymentSchema = new mongoose.Schema(
   {
+    businessUnit: { type: String, enum: ['hostel', 'shop'], default: 'hostel', index: true },
     employee: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', required: true, index: true },
     period: { type: String, required: true, match: /^\d{4}-(0[1-9]|1[0-2])$/, index: true },
     amount: { type: Number, required: true, min: 1 },

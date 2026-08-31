@@ -19,6 +19,7 @@ let smsWorkerRunning = false
 
 const formatSmsPeriod = (periodKey) => `${uzbekMonths[Number(String(periodKey).slice(5, 7)) - 1] || periodKey} oyi`
 const resultFromEvent = (event) => ({
+  accessEventId: event._id?.toString?.() || null,
   eventId: event.eventId,
   // Qurilma eshik qarorini lokal beradi. Backend hech qachon kirishni rad etmaydi.
   allowed: true,
@@ -28,6 +29,8 @@ const resultFromEvent = (event) => ({
   warningCount: event.warningCount,
   warningLimit: FACE_WARNING_LIMIT,
   smsStatus: event.smsStatus,
+  direction: event.direction,
+  attendanceRecorded: event.attendanceRecorded,
   studentId: event.student?.toString?.() || event.student || null,
 })
 
@@ -193,6 +196,27 @@ async function evaluateKnownStudent(student, values, { io } = {}) {
   const existing = await FaceAccessEvent.findOne({ eventId })
   if (existing) return resultFromEvent(existing)
 
+  // Chiqish qurilmasi faqat binodan chiqishni qayd etadi. U kundalik
+  // davomatni, qarzdorlikni yoki SMS limitini qayta ishlamaydi.
+  if (direction === 'OUT') {
+    const event = await FaceAccessEvent.create({
+      eventId,
+      faceIdCode,
+      student: student._id,
+      deviceKey,
+      direction,
+      occurredAt,
+      decision: 'granted',
+      reason: 'Chiqish qayd etildi',
+      debtAmount: 0,
+      warningCount: 0,
+      smsStatus: 'not_required',
+      attendanceRecorded: false,
+    })
+    io?.emit('face-access:changed', { eventId, studentId: student.id, decision: event.decision, direction })
+    return resultFromEvent(event)
+  }
+
   const { debtAmount, installments } = await activeContractAndDebt(student._id, occurredAt)
 
   if (debtAmount <= 0) {
@@ -272,7 +296,7 @@ async function evaluateKnownStudent(student, values, { io } = {}) {
   return resultFromEvent(event)
 }
 
-export async function evaluateStudentFaceAccess(payload, { io } = {}) {
+export async function evaluateStudentFaceAccess(payload, { io, student: suppliedStudent = null } = {}) {
   const faceIdCode = String(payload.faceIdCode || '').trim().toUpperCase()
   const eventId = String(payload.eventId || '').trim()
   const deviceKey = String(payload.deviceKey || '').trim()
@@ -282,7 +306,7 @@ export async function evaluateStudentFaceAccess(payload, { io } = {}) {
 
   const existing = await FaceAccessEvent.findOne({ eventId })
   if (existing) return resultFromEvent(existing)
-  const student = await Student.findOne({ faceIdCode })
+  const student = suppliedStudent || await Student.findOne({ faceIdCode })
   if (!student) return resultFromEvent(await saveObservedEvent({ eventId, faceIdCode, deviceKey, direction, occurredAt, decision: 'observed_unknown', reason: 'FaceID kodi bazadagi talabaga biriktirilmagan' }))
   return withStudentLock(student._id, () => evaluateKnownStudent(student, { faceIdCode, eventId, deviceKey, direction, occurredAt }, { io }))
 }

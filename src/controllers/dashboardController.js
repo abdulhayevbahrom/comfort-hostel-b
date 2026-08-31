@@ -23,6 +23,7 @@ const sumField = async (Model, match, field = 'amount') => {
   const [result] = await Model.aggregate([{ $match: match }, { $group: { _id: null, total: { $sum: `$${field}` }, count: { $sum: 1 } } }])
   return { amount: result?.total || 0, count: result?.count || 0 }
 }
+const hostelUnitFilter = { businessUnit: { $ne: 'shop' } }
 
 const recentPeriods = (now, count = 6) => Array.from({ length: count }, (_, index) => {
   const date = new Date(now.getFullYear(), now.getMonth() - (count - 1 - index), 1)
@@ -92,22 +93,22 @@ class DashboardController {
       ] = await Promise.all([
         Room.find().select('capacity status'),
         StudentContract.find(activeContractFilter).select('student room'),
-        Employee.find({ isActive: true }).select('salary'),
+        Employee.find({ isActive: true, ...hostelUnitFilter }).select('salary'),
         sumField(Payment, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
         sumField(FinePayment, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
         sumField(Expense, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
-        sumField(SalaryPayment, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
+        sumField(SalaryPayment, { createdAt: { $gte: rangeStart, $lt: rangeEnd }, ...hostelUnitFilter }),
         ContractInstallment.find({ periodKey: monthKey, dueDate: { $lte: selectedDayEnd } }).select('student contract amount paidAmount status dueDate').populate('student', 'fullName').populate({ path: 'contract', select: 'room', populate: { path: 'room', select: 'roomNumber block' } }),
         Fine.find({ $expr: { $lt: ['$paidAmount', '$amount'] } }).select('amount paidAmount student'),
         Attendance.find({ attendanceDate: dayKey }).select('status'),
         Payment.find({ createdAt: { $gte: rangeStart, $lt: rangeEnd } }).populate('student', 'fullName').sort({ createdAt: -1 }).limit(5),
         FinePayment.find({ createdAt: { $gte: rangeStart, $lt: rangeEnd } }).populate('student', 'fullName').sort({ createdAt: -1 }).limit(5),
         Expense.find({ createdAt: { $gte: rangeStart, $lt: rangeEnd } }).populate('createdBy', 'firstname lastname').sort({ createdAt: -1 }).limit(5),
-        SalaryPayment.find({ createdAt: { $gte: rangeStart, $lt: rangeEnd } }).populate('employee', 'firstname lastname').sort({ createdAt: -1 }).limit(5),
+        SalaryPayment.find({ createdAt: { $gte: rangeStart, $lt: rangeEnd }, ...hostelUnitFilter }).populate('employee', 'firstname lastname').sort({ createdAt: -1 }).limit(5),
         Payment.aggregate([{ $match: { createdAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
         FinePayment.aggregate([{ $match: { createdAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
         Expense.aggregate([{ $match: { createdAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
-        SalaryPayment.aggregate([{ $match: { period: { $gte: recentPeriods(now)[0] } } }, { $group: { _id: '$period', amount: { $sum: '$amount' } } }]),
+        SalaryPayment.aggregate([{ $match: { period: { $gte: recentPeriods(now)[0] }, ...hostelUnitFilter } }, { $group: { _id: '$period', amount: { $sum: '$amount' } } }]),
         sumField(Payment, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
         sumField(FinePayment, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
         sumField(Expense, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),

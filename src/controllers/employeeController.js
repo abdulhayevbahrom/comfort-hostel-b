@@ -21,6 +21,7 @@ class EmployeeController {
       assignedRooms: Array.isArray(body.assignedRooms)
         ? [...new Set(body.assignedRooms.filter((id) => mongoose.isValidObjectId(id)))]
         : [],
+      businessUnit: body.businessUnit === 'shop' ? 'shop' : 'hostel',
     }
 
     if (payload.canLogin) {
@@ -32,20 +33,6 @@ class EmployeeController {
     }
 
     if (body.faceAccessEnabled !== undefined) payload.faceAccessEnabled = body.faceAccessEnabled === true
-    if (body.workSchedule && typeof body.workSchedule === 'object') {
-      const schedule = body.workSchedule
-      payload.workSchedule = {
-        checkInTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(schedule.checkInTime || '') ? schedule.checkInTime : '09:00',
-        checkOutTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(schedule.checkOutTime || '') ? schedule.checkOutTime : '18:00',
-        workDays: Array.isArray(schedule.workDays) ? schedule.workDays.map(Number) : [1, 2, 3, 4, 5, 6],
-        lateAfterMinutes: Math.max(0, Number(schedule.lateAfterMinutes || 0)),
-        earlyLeaveMinutes: Math.max(0, Number(schedule.earlyLeaveMinutes || 0)),
-        useTimePenalty: schedule.useTimePenalty === true,
-        penaltyPerMinute: Math.max(0, Number(schedule.penaltyPerMinute || 0)),
-        penaltyStartDate: /^\d{4}-\d{2}-\d{2}$/.test(schedule.penaltyStartDate || '') ? schedule.penaltyStartDate : new Date().toISOString().slice(0, 10),
-      }
-    }
-
     return payload
   }
 
@@ -65,7 +52,7 @@ class EmployeeController {
 
   list = async (req, res, next) => {
     try {
-      const filter = {}
+      const filter = { businessUnit: req.query.businessUnit === 'shop' ? 'shop' : { $ne: 'shop' } }
       const search = req.query.search?.trim()
       if (search) {
         filter.$or = ['firstname', 'lastname', 'position', 'login'].map((field) => ({

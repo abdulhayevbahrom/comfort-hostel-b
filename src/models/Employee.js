@@ -23,11 +23,13 @@ const workScheduleSchema = new mongoose.Schema({
 
 const employeeSchema = new mongoose.Schema(
   {
+    businessUnit: { type: String, enum: ['hostel', 'shop'], default: 'hostel', index: true },
     faceIdCode: {
       type: String,
       trim: true,
       uppercase: true,
-      match: /^EMP-[A-F0-9]{12}$/,
+      // Hikvision Employee ID faqat harf va raqam qabul qiladi.
+      match: /^EMP[A-F0-9]{12}$/,
       unique: true,
       sparse: true,
       index: true,
@@ -68,7 +70,7 @@ const employeeSchema = new mongoose.Schema(
 )
 
 employeeSchema.pre('validate', function ensureFaceIdCode() {
-  if (!this.faceIdCode && this._id) this.faceIdCode = `EMP-${this._id.toString().slice(-12).toUpperCase()}`
+  if (!this.faceIdCode && this._id) this.faceIdCode = `EMP${this._id.toString().slice(-12).toUpperCase()}`
 })
 
 employeeSchema.set('toJSON', {

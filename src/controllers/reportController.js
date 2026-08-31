@@ -14,6 +14,7 @@ const MONTH_NAMES = ['Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun', 'Iyul',
 const total = (rows) => rows.reduce((sum, row) => sum + Number(row.amount || 0), 0)
 const asMap = (rows) => new Map(rows.map((row) => [Number(row._id), Number(row.amount || 0)]))
 const sumField = (rows, field = 'amount') => rows.reduce((sum, row) => sum + Number(row[field] || 0), 0)
+const hostelUnitFilter = { businessUnit: { $ne: 'shop' } }
 
 const aggregateByDay = (Model, match, dateField) => Model.aggregate([
   { $match: match },
@@ -42,7 +43,7 @@ class ReportController {
       const [incomeRows, expenseRows, salaryRows, methods, categories, details] = await Promise.all([
         aggregateByDay(Payment, { createdAt: dateMatch }, 'createdAt'),
         aggregateByDay(Expense, { spentAt: dateMatch }, 'spentAt'),
-        SalaryPayment.aggregate([{ $match: { period } }, { $group: { _id: { $dayOfMonth: { date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
+        SalaryPayment.aggregate([{ $match: { period, ...hostelUnitFilter } }, { $group: { _id: { $dayOfMonth: { date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
         Payment.aggregate([{ $match: { createdAt: dateMatch } }, { $group: { _id: '$method', amount: { $sum: '$amount' }, count: { $sum: 1 } } }, { $sort: { amount: -1 } }]),
         Expense.aggregate([{ $match: { spentAt: dateMatch } }, { $group: { _id: '$category', amount: { $sum: '$amount' }, count: { $sum: 1 } } }, { $sort: { amount: -1 } }]),
         this.details({ dateMatch, period }),
@@ -76,7 +77,7 @@ class ReportController {
       const [incomeRows, expenseRows, salaryRows, methods, categories, details] = await Promise.all([
         aggregateByMonth(Payment, { createdAt: dateMatch }, 'createdAt'),
         aggregateByMonth(Expense, { spentAt: dateMatch }, 'spentAt'),
-        SalaryPayment.aggregate([{ $match: { period: periodMatch } }, { $group: { _id: { $toInt: { $substrBytes: ['$period', 5, 2] } }, amount: { $sum: '$amount' }, count: { $sum: 1 } } }, { $sort: { _id: 1 } }]),
+        SalaryPayment.aggregate([{ $match: { period: periodMatch, ...hostelUnitFilter } }, { $group: { _id: { $toInt: { $substrBytes: ['$period', 5, 2] } }, amount: { $sum: '$amount' }, count: { $sum: 1 } } }, { $sort: { _id: 1 } }]),
         Payment.aggregate([{ $match: { createdAt: dateMatch } }, { $group: { _id: '$method', amount: { $sum: '$amount' }, count: { $sum: 1 } } }, { $sort: { amount: -1 } }]),
         Expense.aggregate([{ $match: { spentAt: dateMatch } }, { $group: { _id: '$category', amount: { $sum: '$amount' }, count: { $sum: 1 } } }, { $sort: { amount: -1 } }]),
         this.details({ dateMatch, periodMatch }),
@@ -106,7 +107,7 @@ class ReportController {
 
   details = async ({ dateMatch, period, periodMatch }) => {
     const contractMatch = { createdAt: dateMatch }
-    const salaryMatch = period ? { period } : { period: periodMatch }
+    const salaryMatch = period ? { period, ...hostelUnitFilter } : { period: periodMatch, ...hostelUnitFilter }
     const [
       studentTotal,
       studentNew,
@@ -141,9 +142,9 @@ class ReportController {
       Fine.countDocuments({ createdAt: dateMatch }),
       FinePayment.aggregate([{ $match: { createdAt: dateMatch } }, { $group: { _id: null, amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
       Fine.aggregate([{ $group: { _id: null, amount: { $sum: '$amount' }, paid: { $sum: '$paidAmount' }, count: { $sum: 1 } } }]),
-      Employee.countDocuments(),
-      Employee.countDocuments({ isActive: true }),
-      Employee.aggregate([{ $group: { _id: null, salary: { $sum: '$salary' } } }]),
+      Employee.countDocuments(hostelUnitFilter),
+      Employee.countDocuments({ isActive: true, ...hostelUnitFilter }),
+      Employee.aggregate([{ $match: hostelUnitFilter }, { $group: { _id: null, salary: { $sum: '$salary' } } }]),
       SalaryPayment.aggregate([{ $match: salaryMatch }, { $group: { _id: null, amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
     ])
 

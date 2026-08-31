@@ -22,6 +22,7 @@ import { cashSessionRouter } from './routes/cashSessionRoutes.js'
 import { faceAccessRouter, faceIdIntegrationRouter } from './routes/faceAccessRoutes.js'
 import { faceDeviceRouter } from './routes/faceDeviceRoutes.js'
 import { employeeAttendanceRouter } from './routes/employeeAttendanceRoutes.js'
+import { shopRouter } from './routes/shopRoutes.js'
 import { ApiResponse } from './utils/response.js'
 
 export const app = express()
@@ -54,6 +55,7 @@ app.use('/api/integrations/faceid', faceIdIntegrationRouter)
 app.use('/api/face-access', faceAccessRouter)
 app.use('/api/faceid', faceDeviceRouter)
 app.use('/api/employee-attendance', employeeAttendanceRouter)
+app.use('/api/shop', shopRouter)
 
 app.use((_req, res) => ApiResponse.notFound(res, 'API manzili topilmadi'))
 app.use((error, _req, res, _next) => {

@@ -9,8 +9,9 @@ const workingDates = (year, month, days) => {
   return result
 }
 
-export function calculateEmployeePayroll(employee, attendances, year, month, asOfDate = new Date()) {
-  const schedule = employee.workSchedule || {}
+export function calculateEmployeePayroll(employee, attendances, year, month, asOfDate = new Date(), options = {}) {
+  const schedule = options.schedule || employee.workSchedule || {}
+  const waivedDates = options.waivedDates instanceof Set ? options.waivedDates : new Set(options.waivedDates || [])
   const salary = Number(employee.salary || 0)
   const allWorkingDates = workingDates(year, month, new Set(Array.isArray(schedule.workDays) ? schedule.workDays : [1, 2, 3, 4, 5, 6]))
   const asOfKey = dateKeyInTimeZone(asOfDate)
@@ -33,24 +34,26 @@ export function calculateEmployeePayroll(employee, attendances, year, month, asO
   const checkOut = minutesFromTime(schedule.checkOutTime) + (crosses ? 1440 : 0) - Number(schedule.earlyLeaveMinutes || 0)
   const absentDates = []; const lateDates = []; const earlyLeaveDates = []
   let totalWorkedMinutes = 0; let totalLateMinutes = 0; let totalEarlyLeaveMinutes = 0
+  let chargeableAbsentDays = 0; let chargeableLateMinutes = 0; let chargeableEarlyLeaveMinutes = 0
   for (const date of elapsedDates) {
     const attendance = byDate.get(date)
-    if (!attendance) { absentDates.push(date); continue }
+    const waived = waivedDates.has(date)
+    if (!attendance) { absentDates.push(date); if (!waived) chargeableAbsentDays += 1; continue }
     totalWorkedMinutes += Math.floor(Number(attendance.totalHours || 0) * 60)
     const rawEntry = minutesInTimeZone(attendance.firstEntry); const entry = rawEntry !== null && crosses && rawEntry < start ? rawEntry + 1440 : rawEntry
-    if (entry !== null && entry > checkIn) { const minutes = entry - checkIn; totalLateMinutes += minutes; lateDates.push({ date, minutes }) }
+    if (entry !== null && entry > checkIn) { const minutes = entry - checkIn; totalLateMinutes += minutes; if (!waived) chargeableLateMinutes += minutes; lateDates.push({ date, minutes, waived }) }
     const rawExit = minutesInTimeZone(attendance.lastExit); const exit = rawExit !== null && crosses && rawExit <= start ? rawExit + 1440 : rawExit
-    if (exit !== null && exit < checkOut) { const minutes = checkOut - exit; totalEarlyLeaveMinutes += minutes; earlyLeaveDates.push({ date, minutes }) }
+    if (exit !== null && exit < checkOut) { const minutes = checkOut - exit; totalEarlyLeaveMinutes += minutes; if (!waived) chargeableEarlyLeaveMinutes += minutes; earlyLeaveDates.push({ date, minutes, waived }) }
   }
   const penaltyRate = schedule.useTimePenalty ? Number(schedule.penaltyPerMinute || 0) : minuteRate
-  const lateDeduction = totalLateMinutes * penaltyRate
-  const earlyLeaveDeduction = totalEarlyLeaveMinutes * penaltyRate
-  const absenceDeduction = absentDates.length * shiftMinutes * minuteRate
+  const lateDeduction = chargeableLateMinutes * penaltyRate
+  const earlyLeaveDeduction = chargeableEarlyLeaveMinutes * penaltyRate
+  const absenceDeduction = chargeableAbsentDays * shiftMinutes * minuteRate
   const totalDeduction = lateDeduction + earlyLeaveDeduction + absenceDeduction
   return {
     baseSalary: round(salary), netSalary: round(Math.max(0, salary - totalDeduction)), workingDaysInMonth: allWorkingDates.length,
     presentDays: elapsedDates.length - absentDates.length, absentDays: absentDates.length, absentDates, lateDates, earlyLeaveDates,
     totalWorkedMinutes, totalLateMinutes, totalEarlyLeaveMinutes,
-    deductions: { minuteRate: round(minuteRate), lateDeduction: round(lateDeduction), earlyLeaveDeduction: round(earlyLeaveDeduction), absenceDeduction: round(absenceDeduction), totalDeduction: round(totalDeduction) },
+    deductions: { minuteRate: round(minuteRate), penaltyRate: round(penaltyRate), lateDeduction: round(lateDeduction), earlyLeaveDeduction: round(earlyLeaveDeduction), absenceDeduction: round(absenceDeduction), totalDeduction: round(totalDeduction) },
   }
 }

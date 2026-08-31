@@ -6,6 +6,7 @@ const employeeAttendanceSchema = new mongoose.Schema({
   firstEntry: { type: Date, required: true },
   currentEntry: { type: Date, default: null },
   lastExit: { type: Date, default: null },
+  exitSource: { type: String, enum: ['device', 'schedule'], default: null },
   totalHours: { type: Number, min: 0, default: 0 },
   lastDeviceEvent: { type: mongoose.Schema.Types.ObjectId, ref: 'FaceDeviceEvent', default: null },
 }, { timestamps: true })
