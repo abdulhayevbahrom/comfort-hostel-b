@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { signFaceIdRequest } from '../src/middleware/faceIdIntegration.js'
-import { accessDecision, localDateKey } from '../src/utils/faceAccess.js'
+import { accessDecision, localDateKey, shouldQueueDebtSms } from '../src/utils/faceAccess.js'
 
 test('qarzsiz faol talaba kiradi', () => {
   assert.deepEqual(accessDecision({ hasActiveContract: true, accessEnabled: true, debtAmount: 0, warningCount: 0 }), {
@@ -10,17 +10,23 @@ test('qarzsiz faol talaba kiradi', () => {
   })
 })
 
-test('qarzdor talaba uchinchi ogohlantirishgacha kiradi, keyin bloklanadi', () => {
+test('qarzdor talaba SMS limitidan keyin ham bloklanmaydi', () => {
   assert.equal(accessDecision({ hasActiveContract: true, accessEnabled: true, debtAmount: 1000, warningCount: 2 }).allowed, true)
   assert.deepEqual(accessDecision({ hasActiveContract: true, accessEnabled: true, debtAmount: 1000, warningCount: 3 }), {
-    allowed: false,
-    decision: 'denied_debt_limit',
+    allowed: true,
+    decision: 'granted_warning',
   })
 })
 
-test('faol shartnoma va qo‘lda ruxsat tekshiriladi', () => {
-  assert.equal(accessDecision({ hasActiveContract: false, accessEnabled: true, debtAmount: 0, warningCount: 0 }).decision, 'denied_inactive')
-  assert.equal(accessDecision({ hasActiveContract: true, accessEnabled: false, debtAmount: 0, warningCount: 0 }).decision, 'denied_disabled')
+test('backend shartnoma yoki eski access bayrog‘i sabab eshikni rad etmaydi', () => {
+  assert.equal(accessDecision({ hasActiveContract: false, accessEnabled: false, debtAmount: 0, warningCount: 0 }).allowed, true)
+})
+
+test('qarzdorlik SMSi faqat uch marta navbatga qo‘yiladi', () => {
+  assert.equal(shouldQueueDebtSms({ debtAmount: 1000, warningCount: 0 }), true)
+  assert.equal(shouldQueueDebtSms({ debtAmount: 1000, warningCount: 2 }), true)
+  assert.equal(shouldQueueDebtSms({ debtAmount: 1000, warningCount: 3 }), false)
+  assert.equal(shouldQueueDebtSms({ debtAmount: 0, warningCount: 0 }), false)
 })
 
 test('HMAC imzo deterministik', () => {

@@ -1,13 +1,12 @@
 export const FACE_WARNING_LIMIT = 3
 
-export function accessDecision({ hasActiveContract, accessEnabled, debtAmount, warningCount }) {
-  if (!hasActiveContract) return { allowed: false, decision: 'denied_inactive' }
-  if (!accessEnabled) return { allowed: false, decision: 'denied_disabled' }
+export function accessDecision({ debtAmount }) {
   if (Number(debtAmount) <= 0) return { allowed: true, decision: 'granted' }
-  if (Number(warningCount) >= FACE_WARNING_LIMIT) {
-    return { allowed: false, decision: 'denied_debt_limit' }
-  }
   return { allowed: true, decision: 'granted_warning' }
+}
+
+export function shouldQueueDebtSms({ debtAmount, warningCount }) {
+  return Number(debtAmount) > 0 && Number(warningCount) < FACE_WARNING_LIMIT
 }
 
 export function localDateKey(value) {

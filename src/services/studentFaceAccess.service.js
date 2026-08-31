@@ -6,7 +6,7 @@ import { FaceAccessState } from '../models/FaceAccessState.js'
 import { GeneralSetting } from '../models/GeneralSetting.js'
 import { Student } from '../models/Student.js'
 import { StudentContract } from '../models/StudentContract.js'
-import { accessDecision, FACE_WARNING_LIMIT, localDateKey } from '../utils/faceAccess.js'
+import { accessDecision, FACE_WARNING_LIMIT, localDateKey, shouldQueueDebtSms } from '../utils/faceAccess.js'
 import { renderDebtorSms, sendTextUpSms } from '../utils/textup.js'
 
 const DUPLICATE_SCAN_MS = Math.max(5, Number(process.env.FACEID_RESCAN_SECONDS || 300)) * 1000
@@ -20,7 +20,8 @@ let smsWorkerRunning = false
 const formatSmsPeriod = (periodKey) => `${uzbekMonths[Number(String(periodKey).slice(5, 7)) - 1] || periodKey} oyi`
 const resultFromEvent = (event) => ({
   eventId: event.eventId,
-  allowed: ['granted', 'granted_warning'].includes(event.decision),
+  // Qurilma eshik qarorini lokal beradi. Backend hech qachon kirishni rad etmaydi.
+  allowed: true,
   decision: event.decision,
   reason: event.reason,
   debtAmount: event.debtAmount,
@@ -89,12 +90,12 @@ async function ensureDebtState(studentId, debtAmount, occurredAt) {
     state.clearedAt = null
   }
   state.lastDebtAmount = debtAmount
-  if (state.warningCount >= FACE_WARNING_LIMIT) state.blocked = true
+  state.blocked = false
   await state.save()
   return state
 }
 
-const saveDeniedEvent = (values) => FaceAccessEvent.create({
+const saveObservedEvent = (values) => FaceAccessEvent.create({
   eventId: values.eventId,
   faceIdCode: values.faceIdCode,
   student: values.student?._id || null,
@@ -177,6 +178,8 @@ export async function processPendingFaceAccessSms({ io, limit = 10 } = {}) {
 }
 
 export async function startFaceAccessSmsWorker({ io } = {}) {
+  // Eski remote-access rejimidan qolgan bloklarni yangi attendance-only rejimida bekor qilamiz.
+  await FaceAccessState.updateMany({ blocked: true }, { $set: { blocked: false } })
   await FaceAccessEvent.updateMany({ smsStatus: 'sending' }, { $set: { smsStatus: 'queued', smsNextAttemptAt: new Date() } })
   await processPendingFaceAccessSms({ io })
   if (!smsWorkerTimer) {
@@ -190,13 +193,7 @@ async function evaluateKnownStudent(student, values, { io } = {}) {
   const existing = await FaceAccessEvent.findOne({ eventId })
   if (existing) return resultFromEvent(existing)
 
-  const { hasActiveContract, debtAmount, installments } = await activeContractAndDebt(student._id, occurredAt)
-  const accessEnabled = student.faceAccessEnabled && student.disciplinaryStatus !== 'blacklisted'
-  if (!hasActiveContract || !accessEnabled) {
-    const policy = accessDecision({ hasActiveContract, accessEnabled, debtAmount, warningCount: 0 })
-    const reason = !hasActiveContract ? 'Talabaning faol shartnomasi yo‘q' : 'Talabaning FaceID kirishi o‘chirilgan'
-    return resultFromEvent(await saveDeniedEvent({ eventId, faceIdCode, student, deviceKey, direction, occurredAt, decision: policy.decision, reason, debtAmount }))
-  }
+  const { debtAmount, installments } = await activeContractAndDebt(student._id, occurredAt)
 
   if (debtAmount <= 0) {
     await FaceAccessState.findOneAndUpdate({ student: student._id, activeDebt: true }, { $set: { activeDebt: false, warningCount: 0, blocked: false, lastDebtAmount: 0, clearedAt: occurredAt } })
@@ -207,13 +204,7 @@ async function evaluateKnownStudent(student, values, { io } = {}) {
   }
 
   const state = await ensureDebtState(student._id, debtAmount, occurredAt)
-  const policy = accessDecision({ hasActiveContract: true, accessEnabled: true, debtAmount, warningCount: state.warningCount })
-  if (!policy.allowed) {
-    state.blocked = true; await state.save()
-    const event = await saveDeniedEvent({ eventId, faceIdCode, student, deviceKey, direction, occurredAt, decision: policy.decision, reason: 'Qarzdorlik bo‘yicha 3 ta SMS ogohlantirish ajratilgan', debtAmount, warningCount: state.warningCount })
-    io?.emit('face-access:changed', { eventId, studentId: student.id, decision: event.decision })
-    return resultFromEvent(event)
-  }
+  const policy = accessDecision({ debtAmount })
 
   const lastEvent = await FaceAccessEvent.findOne({
     student: student._id,
@@ -227,6 +218,25 @@ async function evaluateKnownStudent(student, values, { io } = {}) {
     return resultFromEvent(event)
   }
 
+  if (!shouldQueueDebtSms({ debtAmount, warningCount: state.warningCount })) {
+    const event = await FaceAccessEvent.create({
+      eventId,
+      faceIdCode,
+      student: student._id,
+      deviceKey,
+      direction,
+      occurredAt,
+      decision: policy.decision,
+      reason: `${FACE_WARNING_LIMIT}/${FACE_WARNING_LIMIT} SMS ogohlantirish yuborilgan; yangi SMS yuborilmadi`,
+      debtAmount,
+      warningCount: state.warningCount,
+      smsStatus: 'limit_reached',
+    })
+    await recordAttendance(student, occurredAt, event)
+    io?.emit('face-access:changed', { eventId, studentId: student.id, decision: event.decision, warningCount: event.warningCount, smsStatus: event.smsStatus })
+    return resultFromEvent(event)
+  }
+
   const settings = await GeneralSetting.findOneAndUpdate({ key: 'general' }, { $setOnInsert: { key: 'general' } }, { new: true, upsert: true, setDefaultsOnInsert: true })
   const periodKey = installments[0].periodKey
   const content = renderDebtorSms(settings.debtorSmsTemplate, {
@@ -237,7 +247,7 @@ async function evaluateKnownStudent(student, values, { io } = {}) {
   })
   state.warningCount = Math.min(FACE_WARNING_LIMIT, state.warningCount + 1)
   state.lastWarningAt = occurredAt
-  state.blocked = state.warningCount >= FACE_WARNING_LIMIT
+  state.blocked = false
   await state.save()
   const event = await FaceAccessEvent.create({
     eventId,
@@ -273,6 +283,6 @@ export async function evaluateStudentFaceAccess(payload, { io } = {}) {
   const existing = await FaceAccessEvent.findOne({ eventId })
   if (existing) return resultFromEvent(existing)
   const student = await Student.findOne({ faceIdCode })
-  if (!student) return resultFromEvent(await saveDeniedEvent({ eventId, faceIdCode, deviceKey, direction, occurredAt, decision: 'denied_unknown', reason: 'Talaba FaceID kodi topilmadi' }))
+  if (!student) return resultFromEvent(await saveObservedEvent({ eventId, faceIdCode, deviceKey, direction, occurredAt, decision: 'observed_unknown', reason: 'FaceID kodi bazadagi talabaga biriktirilmagan' }))
   return withStudentLock(student._id, () => evaluateKnownStudent(student, { faceIdCode, eventId, deviceKey, direction, occurredAt }, { io }))
 }

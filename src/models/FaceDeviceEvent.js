@@ -5,7 +5,7 @@ const faceDeviceEventSchema = new mongoose.Schema({
   eventId: { type: String, required: true, trim: true, maxlength: 160 },
   occurredAt: { type: Date, required: true, index: true },
   faceCode: { type: String, trim: true, uppercase: true, default: '' },
-  transport: { type: String, enum: ['isup_gateway', 'direct_isapi'], default: 'isup_gateway', index: true },
+  transport: { type: String, enum: ['http_listening', 'isup_gateway', 'direct_isapi'], default: 'http_listening', index: true },
   sourceSerialNo: { type: String, trim: true, maxlength: 120, default: '' },
   rawEventType: { type: String, trim: true, maxlength: 120, default: '' },
   personType: { type: String, enum: ['employee', 'student', 'unknown'], default: 'unknown', index: true },

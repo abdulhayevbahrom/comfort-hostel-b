@@ -8,9 +8,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 *
 
 export const faceDeviceRouter = Router()
 faceDeviceRouter.post('/device/event/:key', textBody, upload.any(), faceDeviceController.event)
-faceDeviceRouter.post('/isup/event', textBody, upload.any(), faceDeviceController.isupEvent)
 faceDeviceRouter.get('/devices', requireAuth, ownerOnly, faceDeviceController.list)
 faceDeviceRouter.post('/devices', requireAuth, ownerOnly, faceDeviceController.create)
 faceDeviceRouter.put('/devices/:id', requireAuth, ownerOnly, faceDeviceController.update)
-faceDeviceRouter.post('/devices/:id/test-door', requireAuth, ownerOnly, faceDeviceController.testDoor)
 faceDeviceRouter.get('/events', requireAuth, ownerOnly, faceDeviceController.events)

@@ -4,8 +4,8 @@ import mongoose from 'mongoose'
 const faceDeviceSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true, maxlength: 120 },
   deviceKey: { type: String, required: true, unique: true, default: () => crypto.randomBytes(24).toString('hex') },
-  model: { type: String, trim: true, default: 'DS-K1T341AMF' },
-  transport: { type: String, enum: ['isup_gateway', 'direct_isapi'], default: 'isup_gateway', index: true },
+  model: { type: String, trim: true, default: 'DS-K1T341CMF' },
+  transport: { type: String, enum: ['http_listening', 'isup_gateway', 'direct_isapi'], default: 'http_listening', index: true },
   isupDeviceId: {
     type: String,
     trim: true,
@@ -15,7 +15,7 @@ const faceDeviceSchema = new mongoose.Schema({
   host: { type: String, trim: true, default: '' },
   doorNo: { type: Number, min: 1, default: 1 },
   direction: { type: String, enum: ['IN', 'OUT', 'BOTH'], default: 'BOTH' },
-  controlMode: { type: String, enum: ['remote_check', 'remote_open'], default: 'remote_check' },
+  controlMode: { type: String, enum: ['attendance_only', 'remote_check', 'remote_open'], default: 'attendance_only' },
   doorControlEnabled: { type: Boolean, default: false },
   isActive: { type: Boolean, default: true, index: true },
   locationDescription: { type: String, trim: true, maxlength: 300, default: '' },

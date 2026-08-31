@@ -13,7 +13,7 @@ class FaceAccessController {
       if (error?.status === 400) return ApiResponse.badRequest(res, error.message)
       if (error?.code === 11000 && req.body?.eventId) {
         const existing = await FaceAccessEvent.findOne({ eventId: req.body.eventId })
-        if (existing) return ApiResponse.ok(res, { allowed: ['granted', 'granted_warning'].includes(existing.decision), decision: existing.decision, reason: existing.reason, debtAmount: existing.debtAmount, warningCount: existing.warningCount, smsStatus: existing.smsStatus })
+        if (existing) return ApiResponse.ok(res, { allowed: true, decision: existing.decision, reason: existing.reason, debtAmount: existing.debtAmount, warningCount: existing.warningCount, smsStatus: existing.smsStatus })
       }
       return next(error)
     }
@@ -32,7 +32,7 @@ class FaceAccessController {
 
   states = async (_req, res, next) => {
     try {
-      const states = await FaceAccessState.find({ activeDebt: true }).populate('student', 'fullName phone faceIdCode photo').sort({ blocked: -1, updatedAt: -1 })
+      const states = await FaceAccessState.find({ activeDebt: true }).populate('student', 'fullName phone faceIdCode photo').sort({ warningCount: -1, updatedAt: -1 })
       return ApiResponse.ok(res, { states })
     } catch (error) { return next(error) }
   }
@@ -45,7 +45,7 @@ class FaceAccessController {
         { $set: { activeDebt: false, warningCount: 0, blocked: false, lastDebtAmount: 0, clearedAt: new Date() } },
         { new: true },
       )
-      return ApiResponse.ok(res, { state }, 'FaceID qarzdorlik bloki bekor qilindi')
+      return ApiResponse.ok(res, { state }, 'FaceID SMS ogohlantirish hisoblagichi nollandi')
     } catch (error) { return next(error) }
   }
 }
