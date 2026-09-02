@@ -14,6 +14,7 @@ const auditSchema = new mongoose.Schema({
 }, { _id: true })
 
 const paymentSchema = new mongoose.Schema({
+  paymentGroup: { type: mongoose.Schema.Types.ObjectId, default: null, index: true },
   student: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true, index: true },
   contract: { type: mongoose.Schema.Types.ObjectId, ref: 'StudentContract', required: true, index: true },
   amount: { type: Number, required: true, min: 1 },

@@ -1,5 +1,6 @@
 import mongoose from 'mongoose'
 import { BlacklistEntry } from '../models/BlacklistEntry.js'
+import { CashSession } from '../models/CashSession.js'
 import { Faculty } from '../models/Faculty.js'
 import { Student } from '../models/Student.js'
 import { StudentContract } from '../models/StudentContract.js'
@@ -9,6 +10,45 @@ import { ApiResponse } from '../utils/response.js'
 import { uploadImages } from '../utils/imgbb.js'
 
 class StudentController {
+  canReceivePayment = (employee) => ['cashier', 'head_cashier'].includes(employee?.role)
+
+  getReceivingCashSession = async (employee) => {
+    if (!this.canReceivePayment(employee)) return null
+    return CashSession.findOneAndUpdate(
+      { cashier: employee._id, status: 'open' },
+      { $setOnInsert: { cashier: employee._id, status: 'open' } },
+      { new: true, upsert: true, setDefaultsOnInsert: true },
+    )
+  }
+
+  addDepositPayment = async (req, res, next) => {
+    try {
+      if (!mongoose.isValidObjectId(req.params.id)) return ApiResponse.notFound(res, 'Talaba topilmadi')
+      const student = await Student.findById(req.params.id)
+      if (!student) return ApiResponse.notFound(res, 'Talaba topilmadi')
+      if (!['none', 'money'].includes(student.depositType)) return ApiResponse.badRequest(res, 'Talabada pul depoziti qabul qilib bo‘lmaydi')
+      if (!this.canReceivePayment(req.employee)) return ApiResponse.forbidden(res, 'Depozit to‘lovini faqat kassir yoki bosh kassir qabul qilishi mumkin')
+      const cashSession = await this.getReceivingCashSession(req.employee)
+      const paymentGroup = new mongoose.Types.ObjectId()
+      const parts = (Array.isArray(req.body.paymentParts) ? req.body.paymentParts : []).map((part) => ({ paymentGroup, method: part.method, amount: Number(part.amount), paidAt: part.paidAt ? new Date(part.paidAt) : null, receivedBy: req.employee._id, cashSession: cashSession?._id || null })).filter((part) => part.amount > 0)
+      if (!parts.length || parts.some((part) => !['cash', 'online', 'card', 'bank'].includes(part.method))) return ApiResponse.badRequest(res, 'Depozit to‘lov usullarini kiriting')
+      if (parts.some((part) => !part.paidAt || Number.isNaN(part.paidAt.getTime()))) return ApiResponse.badRequest(res, 'Har bir depozit to‘lovi sanasini kiriting')
+      const paid = student.depositPayments?.length ? student.depositPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) : student.depositType === 'money' && student.depositReceivedAt ? Number(student.depositAmount || 0) : 0
+      const amount = parts.reduce((sum, part) => sum + part.amount, 0)
+      const balance = Math.max(0, Number(student.depositAmount || 700000) - paid)
+      if (amount > balance) return ApiResponse.badRequest(res, `Maksimal depozit to‘lovi: ${balance.toLocaleString('uz-UZ')} so‘m`)
+      student.depositPayments.push(...parts)
+      student.depositType = 'money'
+      if (!student.depositAmount) student.depositAmount = 700000
+      if (!student.depositReceivedAt) student.depositReceivedAt = parts[0].paidAt
+      student.depositPaymentMethod = student.depositPayments[0]?.method || parts[0].method
+      await student.save()
+      if (cashSession) req.app.get('io')?.emit('cash-sessions:changed', { action: 'deposit-created', cashierId: req.employee.id })
+      this.emitChange(req, 'deposit-payment-created', student)
+      return ApiResponse.created(res, { student, payments: parts, amount }, 'Depozit to‘lovi qabul qilindi')
+    } catch (error) { return next(error) }
+  }
+
   history = async (req, res, next) => {
     try {
       const now = new Date()
@@ -41,12 +81,14 @@ class StudentController {
   cleanPayload(body) {
     const normalizePhone = (value) => String(value || '').replace(/\D/g, '').replace(/^998(?=\d{9}$)/, '')
     const depositPaymentsInput = body.depositPayments && typeof body.depositPayments === 'object' ? body.depositPayments : {}
-    const depositOnlinePaidAt = body.depositOnlinePaidAt ? new Date(body.depositOnlinePaidAt) : null
+    const depositPaymentDates = body.depositPaymentDates && typeof body.depositPaymentDates === 'object' ? body.depositPaymentDates : {}
     const depositReceivedAt = body.depositReceivedAt ? new Date(body.depositReceivedAt) : null
+    const depositPaymentGroup = new mongoose.Types.ObjectId()
     const depositPayments = ['cash', 'online', 'card', 'bank'].map((method) => ({
+      paymentGroup: depositPaymentGroup,
       method,
       amount: Number(depositPaymentsInput[method]) || 0,
-      paidAt: method === 'online' ? depositOnlinePaidAt : depositReceivedAt,
+      paidAt: depositPaymentDates[method] ? new Date(depositPaymentDates[method]) : depositReceivedAt,
     })).filter((item) => item.amount > 0)
     const payload = {
       fullName: String(body.fullName || '').trim(),
@@ -93,10 +135,11 @@ class StudentController {
 
   validateConditionalFields(payload, res) {
     if (payload.studentStatus === 'red' && (!payload.plannedDepartureDate || Number.isNaN(payload.plannedDepartureDate.getTime()))) return ApiResponse.badRequest(res, 'Ketish sanasini tanlang')
-    if (payload.depositType !== 'none' && !payload.depositReceivedAt) return ApiResponse.badRequest(res, 'Depozit qabul qilingan sanani kiriting')
+    if (payload.depositType === 'passport' && !payload.depositReceivedAt) return ApiResponse.badRequest(res, 'Depozit qabul qilingan sanani kiriting')
     if (payload.depositType === 'money' && (!Number.isFinite(payload.depositAmount) || payload.depositAmount <= 0)) return ApiResponse.badRequest(res, 'Pul depoziti summasini kiriting')
-    if (payload.depositType === 'money' && payload.depositPayments.reduce((sum, item) => sum + item.amount, 0) > payload.depositAmount) return ApiResponse.badRequest(res, 'Depozit to‘lovlari umumiy depozit summasidan oshmasligi kerak')
-    if (payload.depositType === 'money' && payload.depositPayments.some((item) => !item.paidAt || Number.isNaN(item.paidAt.getTime()))) return ApiResponse.badRequest(res, 'Click to‘lovi sanasini kiriting')
+    const paidDepositAmount = payload.depositPayments.reduce((sum, item) => sum + item.amount, 0)
+    if (payload.depositType === 'money' && paidDepositAmount > payload.depositAmount) return ApiResponse.badRequest(res, 'To‘langan depozit umumiy depozit summasidan oshmasligi kerak')
+    if (payload.depositType === 'money' && paidDepositAmount > 0 && payload.depositPayments.some((item) => !item.paidAt || Number.isNaN(item.paidAt.getTime()))) return ApiResponse.badRequest(res, 'Har bir depozit to‘lovi sanasini kiriting')
     if (payload.hasTemporaryRegistration && (!Number.isInteger(payload.temporaryRegistrationMonths) || payload.temporaryRegistrationMonths < 1 || payload.temporaryRegistrationMonths > 12)) return ApiResponse.badRequest(res, 'Vaqtinchalik propiska muddatini 1 dan 12 oygacha kiriting')
     if (payload.hasTaxContract && !['student_contract', 'standard_contract'].includes(payload.taxContractType)) return ApiResponse.badRequest(res, 'Soliq shartnomasi turini tanlang')
     if (payload.gender === 'family' && (!payload.zaksSeries || !payload.zaksNumber)) return ApiResponse.badRequest(res, 'Oila uchun ZAKS seriyasi va raqamini kiriting')
@@ -278,6 +321,7 @@ class StudentController {
       if (this.validateConditionalFields(payload, res)) return undefined
       if (await this.resolveEducation(payload, req, res)) return undefined
       if (payload.disciplinaryStatus === 'blacklisted' && !payload.disciplinaryNote) return ApiResponse.badRequest(res, 'Qora ro‘yxat sababini kiriting')
+      if (payload.depositPayments.length && !this.canReceivePayment(req.employee)) return ApiResponse.forbidden(res, 'Depozit pulini kiritish uchun kassir yoki bosh kassir orqali to‘lov qabul qiling')
       const blocked = await this.findBlacklist(payload)
       if (blocked) return ApiResponse.conflict(res, `Bu shaxs qora ro‘yxatda: ${blocked.reason}`)
       const photoFile = req.files?.photo?.[0]
@@ -285,9 +329,11 @@ class StudentController {
       if (payload.gender === 'family' && !marriageCertificateFile) return ApiResponse.badRequest(res, 'Oila uchun ZAKS qog‘ozi rasmini yuklang')
       payload.photo = photoFile ? (await uploadImages([photoFile]))[0] : null
       payload.marriageCertificate = marriageCertificateFile ? (await uploadImages([marriageCertificateFile]))[0] : null
-      payload.depositPayments = payload.depositPayments.map((payment) => ({ ...payment, receivedBy: req.employee?._id || null }))
+      const cashSession = await this.getReceivingCashSession(req.employee)
+      payload.depositPayments = payload.depositPayments.map((payment) => ({ ...payment, receivedBy: req.employee?._id || null, cashSession: cashSession?._id || null }))
       payload.depositPaymentMethod = payload.depositPayments[0]?.method || ''
       const student = await Student.create(payload)
+      if (cashSession && payload.depositPayments.length) req.app.get('io')?.emit('cash-sessions:changed', { action: 'deposit-created', cashierId: req.employee.id })
       await this.syncBlacklist(student)
       await student.populate([{ path: 'university', select: 'name shortName' }, { path: 'faculty', select: 'name' }])
       this.emitChange(req, 'created', student)
@@ -305,6 +351,9 @@ class StudentController {
       if (this.validateConditionalFields(payload, res)) return undefined
       if (await this.resolveEducation(payload, req, res)) return undefined
       if (payload.disciplinaryStatus === 'blacklisted' && !payload.disciplinaryNote) return ApiResponse.badRequest(res, 'Qora ro‘yxat sababini kiriting')
+      const existingDepositPayments = student.depositPayments || []
+      if (existingDepositPayments.length && payload.depositType !== student.depositType) return ApiResponse.badRequest(res, 'Depozit turi to‘lov mavjud bo‘lganda o‘zgartirilmaydi')
+      if (payload.depositPayments.length && !this.canReceivePayment(req.employee) && !existingDepositPayments.length) return ApiResponse.forbidden(res, 'Depozit pulini kiritish uchun kassir yoki bosh kassir orqali to‘lov qabul qiling')
       const blocked = await this.findBlacklist(payload)
       if (blocked && blocked.sourceStudent?.toString() !== student.id) return ApiResponse.conflict(res, `Bu shaxs qora ro‘yxatda: ${blocked.reason}`)
       const photoFile = req.files?.photo?.[0]
@@ -313,8 +362,21 @@ class StudentController {
       const uploaded = photoFile ? (await uploadImages([photoFile]))[0] : null
       payload.photo = req.body.removePhoto ? null : uploaded || student.photo || null
       payload.marriageCertificate = marriageCertificateFile ? (await uploadImages([marriageCertificateFile]))[0] : student.marriageCertificate || null
-      payload.depositPayments = payload.depositPayments.map((payment) => ({ ...payment, receivedBy: req.employee?._id || null }))
-      payload.depositPaymentMethod = payload.depositPayments[0]?.method || ''
+      // Talaba kartasini tahrirlash pul qabul qilish emas. Avval yozilgan
+      // depozit cheklari va ularning kassa sessiyasi o‘zgarmaydi.
+      if (existingDepositPayments.length) {
+        payload.depositPayments = existingDepositPayments
+        payload.depositReceivedAt = student.depositReceivedAt
+        payload.depositPaymentMethod = student.depositPaymentMethod || existingDepositPayments[0]?.method || ''
+      } else if (payload.depositPayments.length) {
+        const cashSession = await this.getReceivingCashSession(req.employee)
+        payload.depositPayments = payload.depositPayments.map((payment) => ({ ...payment, receivedBy: req.employee._id, cashSession: cashSession._id }))
+        payload.depositPaymentMethod = payload.depositPayments[0]?.method || ''
+        req.app.get('io')?.emit('cash-sessions:changed', { action: 'deposit-created', cashierId: req.employee.id })
+      } else {
+        payload.depositPaymentMethod = ''
+        payload.depositReceivedAt = null
+      }
       student.set(payload)
       await student.save()
       await this.syncBlacklist(student)

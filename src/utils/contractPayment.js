@@ -38,7 +38,7 @@ export function calculateContractPayment(startValue, endValue, paymentType, paym
   const start = utcDate(startValue)
   const end = utcDate(endValue)
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) return { durationDays: 0, billingQuantity: 0, totalAmount: 0 }
-  const durationDays = Math.max(0, Math.round((end - start) / DAY_MS))
+  const durationDays = Math.max(0, Math.round((end - start) / DAY_MS) + 1)
   const rate = Math.max(0, Number(paymentAmount) || 0)
 
   if (paymentType === 'daily') {

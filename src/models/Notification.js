@@ -8,7 +8,7 @@ const notificationSchema = new mongoose.Schema(
     message: { type: String, required: true, trim: true, maxlength: 500 },
     count: { type: Number, required: true, min: 1 },
     targetPath: { type: String, required: true, default: '/contracts' },
-    targetRoles: [{ type: String, enum: ['employee', 'manager', 'cashier', 'owner', 'admin'] }],
+    targetRoles: [{ type: String, enum: ['employee', 'manager', 'cashier', 'head_cashier', 'owner', 'admin'] }],
     targetEmployees: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Employee' }],
     readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Employee' }],
   },

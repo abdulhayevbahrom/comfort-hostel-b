@@ -49,7 +49,7 @@ const employeeSchema = new mongoose.Schema(
     canLogin: { type: Boolean, default: false },
     role: {
       type: String,
-      enum: ['employee', 'manager', 'cashier', 'owner', 'admin'],
+      enum: ['employee', 'manager', 'cashier', 'head_cashier', 'owner', 'admin'],
       default: 'employee',
     },
     login: {

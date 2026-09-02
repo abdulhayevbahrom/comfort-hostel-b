@@ -1,4 +1,5 @@
 import { Attendance } from '../models/Attendance.js'
+import { CashSession } from '../models/CashSession.js'
 import { ContractInstallment } from '../models/ContractInstallment.js'
 import { Employee } from '../models/Employee.js'
 import { Expense } from '../models/Expense.js'
@@ -25,6 +26,7 @@ const sumField = async (Model, match, field = 'amount') => {
   return { amount: result?.total || 0, count: result?.count || 0 }
 }
 const hostelUnitFilter = { businessUnit: { $ne: 'shop' } }
+const centralizedPaymentFilter = { $or: [{ cashSession: null }, { cashSession: { $exists: false } }] }
 
 const recentPeriods = (now, count = 6) => Array.from({ length: count }, (_, index) => {
   const date = new Date(now.getFullYear(), now.getMonth() - (count - 1 - index), 1)
@@ -95,39 +97,39 @@ class DashboardController {
         Room.find().select('capacity status'),
         StudentContract.find(activeContractFilter).select('student room'),
         Employee.find({ isActive: true, ...hostelUnitFilter }).select('salary'),
-        sumField(Payment, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
+        sumField(Payment, { ...centralizedPaymentFilter, createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
         sumField(FinePayment, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
         sumField(Expense, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
         sumField(SalaryPayment, { createdAt: { $gte: rangeStart, $lt: rangeEnd }, ...hostelUnitFilter }),
-        ContractInstallment.find({ periodKey: monthKey, dueDate: { $lte: selectedDayEnd } }).select('student contract amount paidAmount status dueDate').populate('student', 'fullName').populate({ path: 'contract', select: 'room', populate: { path: 'room', select: 'roomNumber block' } }),
+        ContractInstallment.find({ dueDate: { $lte: selectedDayEnd } }).select('student contract amount paidAmount status dueDate').populate('student', 'fullName').populate({ path: 'contract', select: 'status room', populate: { path: 'room', select: 'roomNumber block' } }),
         Fine.find({ $expr: { $lt: ['$paidAmount', '$amount'] } }).select('amount paidAmount student'),
         Attendance.find({ attendanceDate: dayKey }).select('status'),
-        Payment.find({ createdAt: { $gte: rangeStart, $lt: rangeEnd } }).populate('student', 'fullName').sort({ createdAt: -1 }).limit(5),
+        Payment.find({ ...centralizedPaymentFilter, createdAt: { $gte: rangeStart, $lt: rangeEnd } }).populate('student', 'fullName').sort({ createdAt: -1 }).limit(5),
         FinePayment.find({ createdAt: { $gte: rangeStart, $lt: rangeEnd } }).populate('student', 'fullName').sort({ createdAt: -1 }).limit(5),
         Expense.find({ createdAt: { $gte: rangeStart, $lt: rangeEnd } }).populate('createdBy', 'firstname lastname').sort({ createdAt: -1 }).limit(5),
         SalaryPayment.find({ createdAt: { $gte: rangeStart, $lt: rangeEnd }, ...hostelUnitFilter }).populate('employee', 'firstname lastname').sort({ createdAt: -1 }).limit(5),
-        Payment.aggregate([{ $match: { createdAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
+        Payment.aggregate([{ $match: { ...centralizedPaymentFilter, createdAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
         FinePayment.aggregate([{ $match: { createdAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
         Expense.aggregate([{ $match: { createdAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
         SalaryPayment.aggregate([{ $match: { period: { $gte: recentPeriods(now)[0] }, ...hostelUnitFilter } }, { $group: { _id: '$period', amount: { $sum: '$amount' } } }]),
-        sumField(Payment, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
+        sumField(Payment, { ...centralizedPaymentFilter, createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
         sumField(FinePayment, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
         sumField(Expense, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
-        Payment.aggregate([{ $match: { createdAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: '$method', amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
+        Payment.aggregate([{ $match: { ...centralizedPaymentFilter, createdAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: '$method', amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
         FinePayment.aggregate([{ $match: { createdAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: '$method', amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
-        Payment.aggregate([{ $match: { createdAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
+        Payment.aggregate([{ $match: { ...centralizedPaymentFilter, createdAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
         FinePayment.aggregate([{ $match: { createdAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
         Expense.aggregate([{ $match: { createdAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
-        Payment.aggregate([{ $match: { createdAt: { $gte: dayStart, $lt: dayEnd } } }, { $group: { _id: '$method', amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
+        Payment.aggregate([{ $match: { ...centralizedPaymentFilter, createdAt: { $gte: dayStart, $lt: dayEnd } } }, { $group: { _id: '$method', amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
         FinePayment.aggregate([{ $match: { createdAt: { $gte: dayStart, $lt: dayEnd } } }, { $group: { _id: '$method', amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
       ])
 
       const [depositIncomeRows, depositTrend, dailyDepositIncome, dailyDepositMethods, todayDepositIncomeRows, returnedDepositRows, returnedDepositTrend, dailyReturnedDeposits, todayReturnedDepositRows] = await Promise.all([
-        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: null, amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
-        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$depositPayments.paidAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
-        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$depositPayments.paidAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
-        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: '$depositPayments.method', amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
-        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: dayStart, $lt: dayEnd } } }, { $group: { _id: '$depositPayments.method', amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: rangeStart, $lt: rangeEnd }, $or: [{ 'depositPayments.cashSession': null }, { 'depositPayments.cashSession': { $exists: false } }] } }, { $group: { _id: null, amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) }, $or: [{ 'depositPayments.cashSession': null }, { 'depositPayments.cashSession': { $exists: false } }] } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$depositPayments.paidAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
+        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: rangeStart, $lt: rangeEnd }, $or: [{ 'depositPayments.cashSession': null }, { 'depositPayments.cashSession': { $exists: false } }] } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$depositPayments.paidAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
+        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: rangeStart, $lt: rangeEnd }, $or: [{ 'depositPayments.cashSession': null }, { 'depositPayments.cashSession': { $exists: false } }] } }, { $group: { _id: '$depositPayments.method', amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: dayStart, $lt: dayEnd }, $or: [{ 'depositPayments.cashSession': null }, { 'depositPayments.cashSession': { $exists: false } }] } }, { $group: { _id: '$depositPayments.method', amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
         Student.aggregate([{ $match: { depositType: 'money', depositReturnedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $unwind: '$depositPayments' }, { $group: { _id: null, amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
         Student.aggregate([{ $match: { depositType: 'money', depositReturnedAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $unwind: '$depositPayments' }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$depositReturnedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
         Student.aggregate([{ $match: { depositType: 'money', depositReturnedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $unwind: '$depositPayments' }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$depositReturnedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
@@ -179,10 +181,11 @@ class DashboardController {
       const usableRooms = rooms.filter((room) => room.status === 'available')
       const totalCapacity = usableRooms.reduce((sum, room) => sum + room.capacity, 0)
       const occupiedBeds = usableRooms.reduce((sum, room) => sum + Math.min(room.capacity, occupiedByRoom.get(room.id) || 0), 0)
-      const debtAmount = installments.reduce((sum, item) => sum + Math.max(0, item.amount - item.paidAmount), 0)
-      const debtorCount = new Set(installments.filter((item) => item.student && item.paidAmount < item.amount).map((item) => item.student.id)).size
+      const dueInstallments = installments.filter((item) => item.student && ['active', 'completed'].includes(item.contract?.status))
+      const debtAmount = dueInstallments.reduce((sum, item) => sum + Math.max(0, item.amount - item.paidAmount), 0)
+      const debtorCount = new Set(dueInstallments.filter((item) => item.paidAmount < item.amount).map((item) => item.student.id)).size
       const debtorMap = new Map()
-      installments.filter((item) => item.student && item.paidAmount < item.amount).forEach((item) => {
+      dueInstallments.filter((item) => item.paidAmount < item.amount).forEach((item) => {
         const key = item.student.id
         if (!debtorMap.has(key)) debtorMap.set(key, { student: item.student, room: item.contract?.room || null, debt: 0 })
         debtorMap.get(key).debt += Math.max(0, item.amount - item.paidAmount)
@@ -194,6 +197,22 @@ class DashboardController {
       attendance.forEach((item) => { attendanceSummary[item.status] += 1 })
       attendanceSummary.unmarked = Math.max(0, attendanceSummary.total - attendance.length)
       const salaryFund = employees.reduce((sum, item) => sum + Number(item.salary || 0), 0)
+      const centralTransferFilter = { status: 'approved', $or: [{ transferStage: 'head_to_owner' }, { transferStage: null }] }
+      const [centralTransferIncome, centralTransferTrend, centralTransferDaily, centralTransferMethods, centralTransferTodayMethods] = await Promise.all([
+        sumField(CashSession, { ...centralTransferFilter, reviewedAt: { $gte: rangeStart, $lt: rangeEnd } }, 'receivedAmount'),
+        CashSession.aggregate([{ $match: { ...centralTransferFilter, reviewedAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$reviewedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$receivedAmount' } } }]),
+        CashSession.aggregate([{ $match: { ...centralTransferFilter, reviewedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$reviewedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$receivedAmount' } } }]),
+        CashSession.aggregate([{ $match: { ...centralTransferFilter, reviewedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $project: { methods: { $objectToArray: '$breakdown' } } }, { $unwind: '$methods' }, { $group: { _id: '$methods.k', amount: { $sum: '$methods.v' }, count: { $sum: { $cond: [{ $gt: ['$methods.v', 0] }, 1, 0] } } } }]),
+        CashSession.aggregate([{ $match: { ...centralTransferFilter, reviewedAt: { $gte: dayStart, $lt: dayEnd } } }, { $project: { methods: { $objectToArray: '$breakdown' } } }, { $unwind: '$methods' }, { $group: { _id: '$methods.k', amount: { $sum: '$methods.v' }, count: { $sum: { $cond: [{ $gt: ['$methods.v', 0] }, 1, 0] } } } }]),
+      ])
+      income.amount += centralTransferIncome.amount
+      income.count += centralTransferIncome.count
+      todayIncome.amount += centralTransferTodayMethods.reduce((sum, item) => sum + Number(item.amount || 0), 0)
+      todayIncome.count += centralTransferTodayMethods.reduce((sum, item) => sum + Number(item.count || 0), 0)
+      incomeTrend.push(...centralTransferTrend)
+      dailyIncome.push(...centralTransferDaily)
+      paymentMethods.push(...centralTransferMethods)
+      dailyPaymentMethods.push(...centralTransferTodayMethods)
       const totalIncome = income.amount + monthlyFineIncome.amount + depositIncome.amount
       const totalIncomeCount = income.count + monthlyFineIncome.count + depositIncome.count
       const totalTodayIncome = todayIncome.amount + todayFineIncome.amount + todayDepositIncome
