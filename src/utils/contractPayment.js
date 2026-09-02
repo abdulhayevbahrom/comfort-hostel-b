@@ -13,6 +13,27 @@ const addMonthsClamped = (date, months) => {
   return result
 }
 
+const calendarMonthInstallments = (start, end, rate) => {
+  const installments = []
+  let monthStart = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1))
+  const finalMonthStart = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1))
+
+  while (monthStart <= finalMonthStart) {
+    const monthEnd = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0))
+    const coveredStart = start > monthStart ? start : monthStart
+    const coveredEnd = end < monthEnd ? end : monthEnd
+    const coveredDays = Math.round((coveredEnd - coveredStart) / DAY_MS) + 1
+    const daysInMonth = monthEnd.getUTCDate()
+    installments.push({
+      periodKey: `${monthStart.getUTCFullYear()}-${String(monthStart.getUTCMonth() + 1).padStart(2, '0')}`,
+      dueDate: coveredStart,
+      amount: Math.round((coveredDays / daysInMonth) * rate),
+    })
+    monthStart = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 1))
+  }
+  return installments
+}
+
 export function calculateContractPayment(startValue, endValue, paymentType, paymentAmount) {
   const start = utcDate(startValue)
   const end = utcDate(endValue)
@@ -24,35 +45,32 @@ export function calculateContractPayment(startValue, endValue, paymentType, paym
     return { durationDays, billingQuantity: durationDays, totalAmount: Math.round(durationDays * rate) }
   }
 
-  let wholeMonths = Math.max(0, (end.getUTCFullYear() - start.getUTCFullYear()) * 12 + end.getUTCMonth() - start.getUTCMonth())
-  let cursor = addMonthsClamped(start, wholeMonths)
-  if (cursor > end) {
-    wholeMonths -= 1
-    cursor = addMonthsClamped(start, wholeMonths)
+  const installments = calendarMonthInstallments(start, end, rate)
+  return {
+    durationDays,
+    billingQuantity: installments.length,
+    totalAmount: installments.reduce((sum, installment) => sum + installment.amount, 0),
   }
-  const nextMonth = addMonthsClamped(cursor, 1)
-  const remainingDays = Math.max(0, Math.round((end - cursor) / DAY_MS))
-  const daysInBillingMonth = Math.max(1, Math.round((nextMonth - cursor) / DAY_MS))
-  const exactMonths = wholeMonths + (remainingDays / daysInBillingMonth)
-  const billingQuantity = Math.ceil(exactMonths)
-
-  return { durationDays, billingQuantity, totalAmount: Math.round(billingQuantity * rate) }
 }
 
 export function buildContractInstallments(contract) {
   const start = utcDate(contract.startDate)
   const quantity = Math.max(1, Number(contract.billingQuantity) || 1)
-  const count = contract.paymentType === 'daily' ? 1 : quantity
+  const monthlyInstallments = contract.paymentType === 'monthly'
+    ? calendarMonthInstallments(start, utcDate(contract.endDate), Math.max(0, Number(contract.paymentAmount) || 0))
+    : []
+  const count = contract.paymentType === 'daily' ? 1 : monthlyInstallments.length || quantity
 
   return Array.from({ length: count }, (_, index) => {
-    const dueDate = contract.paymentType === 'daily' ? start : addMonthsClamped(start, index)
+    const monthlyInstallment = monthlyInstallments[index]
+    const dueDate = contract.paymentType === 'daily' ? start : monthlyInstallment?.dueDate || addMonthsClamped(start, index)
     return {
       contract: contract._id,
       student: contract.student,
       periodIndex: index + 1,
-      periodKey: `${dueDate.getUTCFullYear()}-${String(dueDate.getUTCMonth() + 1).padStart(2, '0')}`,
+      periodKey: monthlyInstallment?.periodKey || `${dueDate.getUTCFullYear()}-${String(dueDate.getUTCMonth() + 1).padStart(2, '0')}`,
       dueDate,
-      amount: contract.paymentType === 'daily' ? contract.totalAmount : contract.paymentAmount,
+      amount: contract.paymentType === 'daily' ? contract.totalAmount : monthlyInstallment?.amount ?? contract.paymentAmount,
       paidAmount: 0,
       status: 'unpaid',
     }

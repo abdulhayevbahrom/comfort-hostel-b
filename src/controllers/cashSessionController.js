@@ -2,6 +2,7 @@ import mongoose from 'mongoose'
 import { CashSession } from '../models/CashSession.js'
 import { Notification } from '../models/Notification.js'
 import { Payment } from '../models/Payment.js'
+import { Student } from '../models/Student.js'
 import { ApiResponse } from '../utils/response.js'
 
 const methods = ['cash', 'card', 'online', 'bank']
@@ -53,15 +54,23 @@ class CashSessionController {
       }
 
       if (!['owner', 'admin'].includes(req.employee.role)) return ApiResponse.forbidden(res, 'Kassa faqat kassir va owner uchun ochiq')
-      const [pendingSessions, recentSessions, organizationPayments, approvedTransfers, openSessions] = await Promise.all([
+      const [pendingSessions, recentSessions, organizationPayments, approvedTransfers, openSessions, depositRows, returnedDepositRows, legacyDepositRows, legacyReturnedDepositRows] = await Promise.all([
         CashSession.find({ status: 'pending' }).populate('cashier', 'firstname lastname position').sort({ closedAt: 1 }),
         CashSession.find({ status: { $in: ['approved', 'rejected'] } }).populate('cashier', 'firstname lastname position').populate('reviewedBy', 'firstname lastname').sort({ reviewedAt: -1 }).limit(30),
         sumPaymentsByMethod({ $or: [{ fundHolder: 'organization' }, { fundHolder: { $exists: false }, cashSession: null }] }),
         CashSession.find({ status: 'approved' }).select('sourceSession breakdown expectedAmount').lean(),
         CashSession.find({ status: 'open' }).populate('cashier', 'firstname lastname position'),
+        Student.aggregate([{ $unwind: '$depositPayments' }, { $group: { _id: '$depositPayments.method', amount: { $sum: '$depositPayments.amount' } } }]),
+        Student.aggregate([{ $match: { depositType: 'money', depositReturnedAt: { $ne: null } } }, { $unwind: '$depositPayments' }, { $group: { _id: '$depositPayments.method', amount: { $sum: '$depositPayments.amount' } } }]),
+        Student.aggregate([{ $match: { depositType: 'money', depositReceivedAt: { $ne: null }, 'depositPayments.0': { $exists: false } } }, { $group: { _id: { $cond: [{ $in: ['$depositPaymentMethod', methods] }, '$depositPaymentMethod', 'cash'] }, amount: { $sum: '$depositAmount' } } }]),
+        Student.aggregate([{ $match: { depositType: 'money', depositReceivedAt: { $ne: null }, depositReturnedAt: { $ne: null }, 'depositPayments.0': { $exists: false } } }, { $group: { _id: { $cond: [{ $in: ['$depositPaymentMethod', methods] }, '$depositPaymentMethod', 'cash'] }, amount: { $sum: '$depositAmount' } } }]),
       ])
       const pendingAmount = pendingSessions.reduce((sum, item) => sum + item.expectedAmount, 0)
       const centralBreakdown = { ...organizationPayments.breakdown }
+      depositRows.forEach((row) => { if (methods.includes(row._id)) centralBreakdown[row._id] += Number(row.amount || 0) })
+      legacyDepositRows.forEach((row) => { if (methods.includes(row._id)) centralBreakdown[row._id] += Number(row.amount || 0) })
+      returnedDepositRows.forEach((row) => { if (methods.includes(row._id)) centralBreakdown[row._id] -= Number(row.amount || 0) })
+      legacyReturnedDepositRows.forEach((row) => { if (methods.includes(row._id)) centralBreakdown[row._id] -= Number(row.amount || 0) })
       approvedTransfers.forEach((transfer) => {
         if (!transfer.sourceSession) centralBreakdown.cash += Number(transfer.expectedAmount || 0)
         else methods.forEach((method) => { centralBreakdown[method] += Number(transfer.breakdown?.[method] || 0) })
@@ -122,6 +131,26 @@ class CashSessionController {
       session.reviewedBy = req.employee._id; session.reviewNote = String(req.body.reviewNote || '').trim()
       await session.save(); this.emit(req, 'approved', session)
       return ApiResponse.ok(res, { session }, 'Kassa qabul qilindi va markaziy kassaga o‘tkazildi')
+    } catch (error) { return next(error) }
+  }
+
+  cancel = async (req, res, next) => {
+    try {
+      if (!mongoose.isValidObjectId(req.params.id)) return ApiResponse.notFound(res, 'Kassa topshirish so‘rovi topilmadi')
+      const session = await CashSession.findOne({ _id: req.params.id, status: 'pending' })
+      if (!session) return ApiResponse.notFound(res, 'Bekor qilinadigan tasdiqlanmagan so‘rov topilmadi')
+      const isOwnCashierRequest = req.employee.role === 'cashier' && session.cashier.toString() === req.employee._id.toString()
+      const isOwner = ['owner', 'admin'].includes(req.employee.role)
+      if (!isOwnCashierRequest && !isOwner) return ApiResponse.forbidden(res, 'Bu so‘rovni bekor qilishga ruxsatingiz yo‘q')
+      session.status = 'rejected'
+      session.reviewedAt = new Date()
+      session.reviewedBy = isOwner ? req.employee._id : null
+      session.reviewNote = isOwner ? 'Owner tomonidan bekor qilindi' : 'Kassir tomonidan bekor qilindi'
+      await session.save()
+      await Notification.deleteOne({ eventKey: `cash-session:${session.id}` })
+      this.emit(req, 'cancelled', session)
+      req.app.get('io')?.emit('notifications:changed', { type: 'cash_session' })
+      return ApiResponse.ok(res, { session }, 'Kassa topshirish so‘rovi bekor qilindi')
     } catch (error) { return next(error) }
   }
 }

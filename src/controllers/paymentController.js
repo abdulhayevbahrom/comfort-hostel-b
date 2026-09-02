@@ -19,18 +19,20 @@ const paymentPopulate = [
 
 const snapshot = (payment) => ({ amount: payment.amount, method: payment.method, payerType: payment.payerType, payerName: payment.payerName || '', note: payment.note || '' })
 
-const adjustCashSession = async (payment, oldSnapshot, newSnapshot, cancelled = false) => {
+const adjustCashSession = async (payment, oldSnapshot, newSnapshot, cancelled = false, session = null) => {
   if (!payment.cashSession) return
   const oldCash = oldSnapshot.method === 'cash' ? oldSnapshot.amount : 0
   const newCash = cancelled ? 0 : (newSnapshot.method === 'cash' ? newSnapshot.amount : 0)
   const amountDelta = newCash - oldCash
   const countDelta = cancelled && oldCash > 0 ? -1 : oldCash <= 0 && newCash > 0 ? 1 : oldCash > 0 && newCash <= 0 ? -1 : 0
-  const session = await CashSession.findById(payment.cashSession)
-  if (!session || session.status === 'open') return
-  session.expectedAmount = Math.max(0, session.expectedAmount + amountDelta)
-  session.paymentCount = Math.max(0, session.paymentCount + countDelta)
-  if (session.status === 'approved' && session.receivedAmount !== null) session.receivedAmount = Math.max(0, session.receivedAmount + amountDelta)
-  await session.save()
+  const cashSessionQuery = CashSession.findById(payment.cashSession)
+  if (session) cashSessionQuery.session(session)
+  const cashSession = await cashSessionQuery
+  if (!cashSession || cashSession.status === 'open') return
+  cashSession.expectedAmount = Math.max(0, cashSession.expectedAmount + amountDelta)
+  cashSession.paymentCount = Math.max(0, cashSession.paymentCount + countDelta)
+  if (cashSession.status === 'approved' && cashSession.receivedAmount !== null) cashSession.receivedAmount = Math.max(0, cashSession.receivedAmount + amountDelta)
+  await cashSession.save(session ? { session } : undefined)
 }
 
 class PaymentController {
@@ -184,26 +186,36 @@ class PaymentController {
       if (!Number.isFinite(amount) || amount <= 0) return ApiResponse.badRequest(res, 'To‘lov summasini kiriting')
       if (!['cash', 'card', 'bank', 'online'].includes(method)) return ApiResponse.badRequest(res, 'To‘lov usulini tanlang')
       if (!String(payerType || '').trim()) return ApiResponse.badRequest(res, 'To‘lovni kim qilganini kiriting')
-      const contract = await StudentContract.findById(contractId)
-      if (!contract) return ApiResponse.notFound(res, 'Shartnoma topilmadi')
-      const installment = await ContractInstallment.findOne({ _id: installmentId, contract: contract._id })
-      if (!installment) return ApiResponse.badRequest(res, 'Tanlangan to‘lov davri topilmadi')
-      const balance = Math.max(0, installment.amount - installment.paidAmount)
-      if (amount > balance) return ApiResponse.badRequest(res, `Maksimal to‘lov: ${balance.toLocaleString('uz-UZ')} so‘m`)
-      installment.paidAmount += amount; installment.status = installment.paidAmount >= installment.amount ? 'paid' : 'partial'; await installment.save()
       const fundHolder = req.employee.role === 'cashier'
         ? (method === 'cash' ? 'cashier' : method === 'bank' ? 'organization' : req.body.fundHolder)
         : 'organization'
       if (req.employee.role === 'cashier' && !['cash', 'bank'].includes(method) && !['cashier', 'organization'].includes(fundHolder)) return ApiResponse.badRequest(res, 'Pul tushadigan hisobni tanlang')
-      let cashSession = null
-      if (req.employee.role === 'cashier' && fundHolder === 'cashier') {
-        cashSession = await CashSession.findOneAndUpdate(
-          { cashier: req.employee._id, status: 'open' },
-          { $setOnInsert: { cashier: req.employee._id, status: 'open' } },
-          { new: true, upsert: true, setDefaultsOnInsert: true },
-        )
-      }
-      const payment = await Payment.create({ student: contract.student, contract: contract._id, amount, method, fundHolder, payerType, note, receivedBy: req.employee._id, cashSession: cashSession?._id || null, allocations: [{ installment: installment._id, amount }], auditHistory: [{ action: 'created', performedBy: req.employee._id, after: { amount, method, payerType, note } }] })
+      let payment
+      let cashSession
+      const session = await mongoose.startSession()
+      try {
+        await session.withTransaction(async () => {
+          const contract = await StudentContract.findById(contractId).session(session)
+          if (!contract) throw Object.assign(new Error('Shartnoma topilmadi'), { statusCode: 404 })
+          const installment = await ContractInstallment.findOne({ _id: installmentId, contract: contract._id }).session(session)
+          if (!installment) throw Object.assign(new Error('Tanlangan to‘lov davri topilmadi'), { statusCode: 400 })
+          const balance = Math.max(0, installment.amount - installment.paidAmount)
+          if (amount > balance) throw Object.assign(new Error(`Maksimal to‘lov: ${balance.toLocaleString('uz-UZ')} so‘m`), { statusCode: 400 })
+
+          installment.paidAmount += amount
+          installment.status = installment.paidAmount >= installment.amount ? 'paid' : 'partial'
+          await installment.save({ session })
+
+          if (req.employee.role === 'cashier' && fundHolder === 'cashier') {
+            cashSession = await CashSession.findOneAndUpdate(
+              { cashier: req.employee._id, status: 'open' },
+              { $setOnInsert: { cashier: req.employee._id, status: 'open' } },
+              { new: true, upsert: true, setDefaultsOnInsert: true, session },
+            )
+          }
+          [payment] = await Payment.create([{ student: contract.student, contract: contract._id, amount, method, fundHolder, payerType, note, receivedBy: req.employee._id, cashSession: cashSession?._id || null, allocations: [{ installment: installment._id, amount }], auditHistory: [{ action: 'created', performedBy: req.employee._id, after: { amount, method, payerType, note } }] }], { session })
+        })
+      } finally { await session.endSession() }
       await payment.populate(paymentPopulate); this.emit(req, 'created', payment)
       if (cashSession) req.app.get('io')?.emit('cash-sessions:changed', { action: 'payment-created', cashierId: req.employee.id })
       return ApiResponse.created(res, { payment }, 'To‘lov muvaffaqiyatli qabul qilindi')
@@ -213,28 +225,36 @@ class PaymentController {
   update = async (req, res, next) => {
     try {
       if (!mongoose.isValidObjectId(req.params.id)) return ApiResponse.notFound(res, 'To‘lov topilmadi')
-      const payment = await Payment.findById(req.params.id)
-      if (!payment) return ApiResponse.notFound(res, 'To‘lov topilmadi')
-      if (payment.status === 'cancelled' || payment.cancelledAt) return ApiResponse.badRequest(res, 'Bekor qilingan to‘lovni tahrirlab bo‘lmaydi')
-      const before = snapshot(payment)
       const amount = Number(req.body.amount)
       const method = req.body.method
       const payerType = req.body.payerType
       if (!Number.isFinite(amount) || amount <= 0) return ApiResponse.badRequest(res, 'To‘lov summasini kiriting')
       if (!['cash', 'card', 'bank', 'online'].includes(method)) return ApiResponse.badRequest(res, 'To‘lov usulini tanlang')
       if (!String(payerType || '').trim()) return ApiResponse.badRequest(res, 'To‘lovni kim qilganini kiriting')
-      const allocation = payment.allocations[0]
-      const installment = await ContractInstallment.findById(allocation?.installment)
-      if (!installment) return ApiResponse.badRequest(res, 'To‘lov davri topilmadi')
-      const available = Math.max(0, installment.amount - installment.paidAmount) + allocation.amount
-      if (amount > available) return ApiResponse.badRequest(res, `Maksimal to‘lov: ${available.toLocaleString('uz-UZ')} so‘m`)
-      installment.paidAmount = Math.max(0, installment.paidAmount - allocation.amount) + amount
-      installment.status = installment.paidAmount <= 0 ? 'unpaid' : installment.paidAmount >= installment.amount ? 'paid' : 'partial'
-      await installment.save()
-      payment.amount = amount; payment.method = method; payment.payerType = payerType; payment.note = String(req.body.note || '').trim(); payment.allocations = [{ installment: installment._id, amount }]
-      payment.auditHistory.push({ action: 'updated', performedBy: req.employee._id, before, after: snapshot(payment) })
-      await adjustCashSession(payment, before, snapshot(payment))
-      await payment.save(); await this.notifyCashier(req, payment, 'updated', before); await payment.populate(paymentPopulate); this.emit(req, 'updated', payment)
+      let payment
+      let before
+      const session = await mongoose.startSession()
+      try {
+        await session.withTransaction(async () => {
+          payment = await Payment.findById(req.params.id).session(session)
+          if (!payment) throw Object.assign(new Error('To‘lov topilmadi'), { statusCode: 404 })
+          if (payment.status === 'cancelled' || payment.cancelledAt) throw Object.assign(new Error('Bekor qilingan to‘lovni tahrirlab bo‘lmaydi'), { statusCode: 400 })
+          before = snapshot(payment)
+          const allocation = payment.allocations[0]
+          const installment = await ContractInstallment.findById(allocation?.installment).session(session)
+          if (!installment) throw Object.assign(new Error('To‘lov davri topilmadi'), { statusCode: 400 })
+          const available = Math.max(0, installment.amount - installment.paidAmount) + allocation.amount
+          if (amount > available) throw Object.assign(new Error(`Maksimal to‘lov: ${available.toLocaleString('uz-UZ')} so‘m`), { statusCode: 400 })
+          installment.paidAmount = Math.max(0, installment.paidAmount - allocation.amount) + amount
+          installment.status = installment.paidAmount <= 0 ? 'unpaid' : installment.paidAmount >= installment.amount ? 'paid' : 'partial'
+          await installment.save({ session })
+          payment.amount = amount; payment.method = method; payment.payerType = payerType; payment.note = String(req.body.note || '').trim(); payment.allocations = [{ installment: installment._id, amount }]
+          payment.auditHistory.push({ action: 'updated', performedBy: req.employee._id, before, after: snapshot(payment) })
+          await adjustCashSession(payment, before, snapshot(payment), false, session)
+          await payment.save({ session })
+        })
+      } finally { await session.endSession() }
+      await this.notifyCashier(req, payment, 'updated', before); await payment.populate(paymentPopulate); this.emit(req, 'updated', payment)
       return ApiResponse.ok(res, { payment }, 'To‘lov yangilandi')
     } catch (error) { return next(error) }
   }
@@ -242,18 +262,30 @@ class PaymentController {
   remove = async (req, res, next) => {
     try {
       if (!mongoose.isValidObjectId(req.params.id)) return ApiResponse.notFound(res, 'To‘lov topilmadi')
-      const payment = await Payment.findById(req.params.id)
-      if (!payment) return ApiResponse.notFound(res, 'To‘lov topilmadi')
-      if (payment.status === 'cancelled' || payment.cancelledAt) return ApiResponse.badRequest(res, 'To‘lov avval bekor qilingan')
-      const before = snapshot(payment)
-      for (const allocation of payment.allocations) {
-        const installment = await ContractInstallment.findById(allocation.installment)
-        if (installment) { installment.paidAmount = Math.max(0, installment.paidAmount - allocation.amount); installment.status = installment.paidAmount <= 0 ? 'unpaid' : installment.paidAmount >= installment.amount ? 'paid' : 'partial'; await installment.save() }
-      }
-      payment.status = 'cancelled'; payment.cancelledAt = new Date(); payment.cancelledBy = req.employee._id
-      payment.auditHistory.push({ action: 'cancelled', performedBy: req.employee._id, before })
-      await adjustCashSession(payment, before, before, true)
-      await payment.save(); await this.notifyCashier(req, payment, 'cancelled', before); await payment.populate(paymentPopulate); this.emit(req, 'cancelled', payment)
+      let payment
+      let before
+      const session = await mongoose.startSession()
+      try {
+        await session.withTransaction(async () => {
+          payment = await Payment.findById(req.params.id).session(session)
+          if (!payment) throw Object.assign(new Error('To‘lov topilmadi'), { statusCode: 404 })
+          if (payment.status === 'cancelled' || payment.cancelledAt) throw Object.assign(new Error('To‘lov avval bekor qilingan'), { statusCode: 400 })
+          before = snapshot(payment)
+          for (const allocation of payment.allocations) {
+            const installment = await ContractInstallment.findById(allocation.installment).session(session)
+            if (installment) {
+              installment.paidAmount = Math.max(0, installment.paidAmount - allocation.amount)
+              installment.status = installment.paidAmount <= 0 ? 'unpaid' : installment.paidAmount >= installment.amount ? 'paid' : 'partial'
+              await installment.save({ session })
+            }
+          }
+          payment.status = 'cancelled'; payment.cancelledAt = new Date(); payment.cancelledBy = req.employee._id
+          payment.auditHistory.push({ action: 'cancelled', performedBy: req.employee._id, before })
+          await adjustCashSession(payment, before, before, true, session)
+          await payment.save({ session })
+        })
+      } finally { await session.endSession() }
+      await this.notifyCashier(req, payment, 'cancelled', before); await payment.populate(paymentPopulate); this.emit(req, 'cancelled', payment)
       return ApiResponse.ok(res, { payment }, 'To‘lov bekor qilindi')
     } catch (error) { return next(error) }
   }

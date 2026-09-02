@@ -8,6 +8,7 @@ import { Payment } from '../models/Payment.js'
 import { Room } from '../models/Room.js'
 import { SalaryPayment } from '../models/SalaryPayment.js'
 import { StudentContract } from '../models/StudentContract.js'
+import { Student } from '../models/Student.js'
 import { ApiResponse } from '../utils/response.js'
 
 const localKeys = () => {
@@ -121,6 +122,57 @@ class DashboardController {
         FinePayment.aggregate([{ $match: { createdAt: { $gte: dayStart, $lt: dayEnd } } }, { $group: { _id: '$method', amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
       ])
 
+      const [depositIncomeRows, depositTrend, dailyDepositIncome, dailyDepositMethods, todayDepositIncomeRows, returnedDepositRows, returnedDepositTrend, dailyReturnedDeposits, todayReturnedDepositRows] = await Promise.all([
+        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: null, amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$depositPayments.paidAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
+        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$depositPayments.paidAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
+        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: '$depositPayments.method', amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: dayStart, $lt: dayEnd } } }, { $group: { _id: '$depositPayments.method', amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $match: { depositType: 'money', depositReturnedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $unwind: '$depositPayments' }, { $group: { _id: null, amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $match: { depositType: 'money', depositReturnedAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $unwind: '$depositPayments' }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$depositReturnedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
+        Student.aggregate([{ $match: { depositType: 'money', depositReturnedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $unwind: '$depositPayments' }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$depositReturnedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
+        Student.aggregate([{ $match: { depositType: 'money', depositReturnedAt: { $gte: dayStart, $lt: dayEnd } } }, { $unwind: '$depositPayments' }, { $group: { _id: null, amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
+      ])
+      const legacyBase = { depositType: 'money', depositReceivedAt: { $ne: null }, 'depositPayments.0': { $exists: false } }
+      const [legacyIncomeRows, legacyTrend, legacyDailyIncome, legacyMethods, legacyTodayMethods, legacyReturnedRows, legacyReturnedTrend, legacyDailyReturns, legacyTodayReturnedRows] = await Promise.all([
+        Student.aggregate([{ $match: { ...legacyBase, depositReceivedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: null, amount: { $sum: '$depositAmount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $match: { ...legacyBase, depositReceivedAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$depositReceivedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositAmount' } } }]),
+        Student.aggregate([{ $match: { ...legacyBase, depositReceivedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$depositReceivedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositAmount' } } }]),
+        Student.aggregate([{ $match: { ...legacyBase, depositReceivedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $cond: [{ $in: ['$depositPaymentMethod', ['cash', 'online', 'card', 'bank']] }, '$depositPaymentMethod', 'cash'] }, amount: { $sum: '$depositAmount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $match: { ...legacyBase, depositReceivedAt: { $gte: dayStart, $lt: dayEnd } } }, { $group: { _id: { $cond: [{ $in: ['$depositPaymentMethod', ['cash', 'online', 'card', 'bank']] }, '$depositPaymentMethod', 'cash'] }, amount: { $sum: '$depositAmount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $match: { ...legacyBase, depositReturnedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: null, amount: { $sum: '$depositAmount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $match: { ...legacyBase, depositReturnedAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$depositReturnedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositAmount' } } }]),
+        Student.aggregate([{ $match: { ...legacyBase, depositReturnedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$depositReturnedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositAmount' } } }]),
+        Student.aggregate([{ $match: { ...legacyBase, depositReturnedAt: { $gte: dayStart, $lt: dayEnd } } }, { $group: { _id: null, amount: { $sum: '$depositAmount' }, count: { $sum: 1 } } }]),
+      ])
+      depositTrend.push(...legacyTrend)
+      dailyDepositIncome.push(...legacyDailyIncome)
+      dailyDepositMethods.push(...legacyMethods)
+      todayDepositIncomeRows.push(...legacyTodayMethods)
+      returnedDepositTrend.push(...legacyReturnedTrend)
+      dailyReturnedDeposits.push(...legacyDailyReturns)
+      const depositIncome = { amount: depositIncomeRows[0]?.amount || 0, count: depositIncomeRows[0]?.count || 0 }
+      depositIncome.amount += legacyIncomeRows[0]?.amount || 0
+      depositIncome.count += legacyIncomeRows[0]?.count || 0
+      const todayDepositIncome = todayDepositIncomeRows.reduce((sum, item) => sum + Number(item.amount || 0), 0)
+      const todayDepositCount = todayDepositIncomeRows.reduce((sum, item) => sum + Number(item.count || 0), 0)
+      const returnedDeposit = { amount: returnedDepositRows[0]?.amount || 0, count: returnedDepositRows[0]?.count || 0 }
+      const todayReturnedDeposit = { amount: todayReturnedDepositRows[0]?.amount || 0, count: todayReturnedDepositRows[0]?.count || 0 }
+      returnedDeposit.amount += legacyReturnedRows[0]?.amount || 0
+      returnedDeposit.count += legacyReturnedRows[0]?.count || 0
+      todayReturnedDeposit.amount += legacyTodayReturnedRows[0]?.amount || 0
+      todayReturnedDeposit.count += legacyTodayReturnedRows[0]?.count || 0
+      const depositStudents = await Student.find({ depositReturnedAt: null, depositType: { $in: ['none', 'money'] } }).select('depositType depositAmount depositReceivedAt depositPayments')
+      const depositDebtSummary = depositStudents.reduce((summary, student) => {
+        const required = student.depositType === 'none' ? 700000 : Number(student.depositAmount || 700000)
+        const paid = student.depositPayments?.length
+          ? student.depositPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
+          : student.depositType === 'money' && student.depositReceivedAt ? Number(student.depositAmount || 0) : 0
+        const debt = Math.max(0, required - paid)
+        if (debt > 0) { summary.amount += debt; summary.students += 1 }
+        return summary
+      }, { amount: 0, students: 0 })
+
       const activeStudentIds = new Set(activeContracts.map((item) => item.student.toString()))
       const occupiedByRoom = new Map()
       activeContracts.forEach((item) => occupiedByRoom.set(item.room.toString(), (occupiedByRoom.get(item.room.toString()) || 0) + 1))
@@ -142,21 +194,25 @@ class DashboardController {
       attendance.forEach((item) => { attendanceSummary[item.status] += 1 })
       attendanceSummary.unmarked = Math.max(0, attendanceSummary.total - attendance.length)
       const salaryFund = employees.reduce((sum, item) => sum + Number(item.salary || 0), 0)
-      const totalIncome = income.amount + monthlyFineIncome.amount
-      const totalIncomeCount = income.count + monthlyFineIncome.count
-      const totalTodayIncome = todayIncome.amount + todayFineIncome.amount
-      const totalTodayIncomeCount = todayIncome.count + todayFineIncome.count
-      const outflow = expenses.amount + salaryPaid.amount
-      const trendMap = (rows) => new Map(rows.map((item) => [item._id, item.amount]))
+      const totalIncome = income.amount + monthlyFineIncome.amount + depositIncome.amount
+      const totalIncomeCount = income.count + monthlyFineIncome.count + depositIncome.count
+      const totalTodayIncome = todayIncome.amount + todayFineIncome.amount + todayDepositIncome
+      const totalTodayIncomeCount = todayIncome.count + todayFineIncome.count + todayDepositCount
+      const outflow = expenses.amount + salaryPaid.amount + returnedDeposit.amount
+      const trendMap = (rows) => rows.reduce((result, item) => result.set(item._id, (result.get(item._id) || 0) + Number(item.amount || 0)), new Map())
       const incomeByPeriod = trendMap(incomeTrend)
       const fineIncomeByPeriod = trendMap(fineIncomeTrend)
+      const depositIncomeByPeriod = trendMap(depositTrend)
       const expenseByPeriod = trendMap(expenseTrend)
       const salaryByPeriod = trendMap(salaryTrend)
-      const trends = recentPeriods(now).map((period) => ({ period, income: (incomeByPeriod.get(period) || 0) + (fineIncomeByPeriod.get(period) || 0), expenses: expenseByPeriod.get(period) || 0, salaries: salaryByPeriod.get(period) || 0 }))
+      const returnedDepositByPeriod = trendMap(returnedDepositTrend)
+      const trends = recentPeriods(now).map((period) => ({ period, income: (incomeByPeriod.get(period) || 0) + (fineIncomeByPeriod.get(period) || 0) + (depositIncomeByPeriod.get(period) || 0), expenses: (expenseByPeriod.get(period) || 0) + (returnedDepositByPeriod.get(period) || 0), salaries: salaryByPeriod.get(period) || 0 }))
       const dailyIncomeMap = new Map(dailyIncome.map((item) => [item._id, item.amount]))
       const dailyFineIncomeMap = new Map(dailyFineIncome.map((item) => [item._id, item.amount]))
+      const dailyDepositIncomeMap = new Map(dailyDepositIncome.map((item) => [item._id, item.amount]))
       const dailyExpenseMap = new Map(dailyExpenses.map((item) => [item._id, item.amount]))
-      const dailyTrends = rangeDays(rangeStart, rangeEnd).map(({ day, key }) => ({ day, income: (dailyIncomeMap.get(key) || 0) + (dailyFineIncomeMap.get(key) || 0), expenses: dailyExpenseMap.get(key) || 0 }))
+      const dailyReturnedDepositMap = new Map(dailyReturnedDeposits.map((item) => [item._id, item.amount]))
+      const dailyTrends = rangeDays(rangeStart, rangeEnd).map(({ day, key }) => ({ day, income: (dailyIncomeMap.get(key) || 0) + (dailyFineIncomeMap.get(key) || 0) + (dailyDepositIncomeMap.get(key) || 0), expenses: (dailyExpenseMap.get(key) || 0) + (dailyReturnedDepositMap.get(key) || 0) }))
       const mergeMethods = (primary, secondary) => {
         const methodMap = new Map()
         ;[...primary, ...secondary].forEach((item) => {
@@ -181,15 +237,15 @@ class DashboardController {
         dateRange: { start: rangeStartKey, end: rangeEndKey },
         students: { active: activeStudentIds.size },
         rooms: { total: rooms.length, available: usableRooms.length, maintenance: rooms.length - usableRooms.length, capacity: totalCapacity, occupied: occupiedBeds, free: Math.max(0, totalCapacity - occupiedBeds), occupancyRate: totalCapacity ? Math.round((occupiedBeds / totalCapacity) * 100) : 0 },
-        finance: { income: totalIncome, incomeCount: totalIncomeCount, fineIncome: totalIncome - income.amount, fineIncomeCount: totalIncomeCount - income.count, expenses: expenses.amount, expenseCount: expenses.count, salaryPaid: salaryPaid.amount, salaryPaymentCount: salaryPaid.count, salaryFund, outflow, balance: totalIncome - outflow, todayIncome: totalTodayIncome, todayIncomeCount: totalTodayIncomeCount, todayFineIncome: todayFineIncome.amount, todayExpense: todayExpense.amount, todayBalance: totalTodayIncome - todayExpense.amount },
-        debt: { amount: debtAmount, students: debtorCount, fineAmount: fineDebt, fineStudents: fineStudentCount },
+        finance: { income: totalIncome, incomeCount: totalIncomeCount, fineIncome: monthlyFineIncome.amount, fineIncomeCount: monthlyFineIncome.count, depositIncome: depositIncome.amount, depositIncomeCount: depositIncome.count, returnedDeposit: returnedDeposit.amount, returnedDepositCount: returnedDeposit.count, expenses: expenses.amount + returnedDeposit.amount, expenseCount: expenses.count + returnedDeposit.count, salaryPaid: salaryPaid.amount, salaryPaymentCount: salaryPaid.count, salaryFund, outflow, balance: totalIncome - outflow, todayIncome: totalTodayIncome, todayIncomeCount: totalTodayIncomeCount, todayFineIncome: todayFineIncome.amount, todayReturnedDeposit: todayReturnedDeposit.amount, todayExpense: todayExpense.amount + todayReturnedDeposit.amount, todayBalance: totalTodayIncome - todayExpense.amount - todayReturnedDeposit.amount },
+        debt: { amount: debtAmount, students: debtorCount, fineAmount: fineDebt, fineStudents: fineStudentCount, depositAmount: depositDebtSummary.amount, depositStudents: depositDebtSummary.students },
         attendance: attendanceSummary,
         employees: { active: employees.length },
         transactions,
         trends,
         dailyTrends,
-        paymentMethods: mergeMethods(paymentMethods, finePaymentMethods),
-        dailyPaymentMethods: mergeMethods(dailyPaymentMethods, dailyFinePaymentMethods),
+        paymentMethods: mergeMethods(mergeMethods(paymentMethods, finePaymentMethods), dailyDepositMethods),
+        dailyPaymentMethods: mergeMethods(mergeMethods(dailyPaymentMethods, dailyFinePaymentMethods), todayDepositIncomeRows),
         topDebtors,
         selectedDate: dayKey,
         generatedAt: now,

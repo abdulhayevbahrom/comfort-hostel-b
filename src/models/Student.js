@@ -5,6 +5,13 @@ const photoSchema = new mongoose.Schema(
   { _id: false },
 )
 
+const depositPaymentSchema = new mongoose.Schema({
+  amount: { type: Number, required: true, min: 1 },
+  method: { type: String, enum: ['cash', 'online', 'card', 'bank'], required: true },
+  paidAt: { type: Date, required: true },
+  receivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', default: null },
+}, { timestamps: true })
+
 const studentSchema = new mongoose.Schema(
   {
     faceIdCode: {
@@ -21,11 +28,13 @@ const studentSchema = new mongoose.Schema(
     fullName: { type: String, required: true, trim: true, maxlength: 150 },
     phone: { type: String, required: true, trim: true, match: /^\d{9}$/ },
     gender: { type: String, enum: ['male', 'female', 'family', 'guest'], required: true },
-    parentPhone: { type: String, trim: true, default: '', validate: { validator: (value) => !value || /^\d{9}$/.test(value), message: 'Ota-ona telefoni 9 ta raqamdan iborat bo‘lishi kerak' } },
+    fatherPhone: { type: String, trim: true, default: '', validate: { validator: (value) => !value || /^\d{9}$/.test(value), message: 'Otasi yoki bobosi telefoni 9 ta raqamdan iborat bo‘lishi kerak' } },
+    motherPhone: { type: String, trim: true, default: '', validate: { validator: (value) => !value || /^\d{9}$/.test(value), message: 'Onasi yoki buvisi telefoni 9 ta raqamdan iborat bo‘lishi kerak' } },
     depositType: { type: String, enum: ['none', 'money', 'passport'], default: 'none' },
     depositAmount: { type: Number, min: 0, default: 0 },
     depositPaymentMethod: { type: String, enum: ['', 'cash', 'online', 'card', 'bank'], default: '' },
     depositReceivedAt: { type: Date, default: null },
+    depositPayments: { type: [depositPaymentSchema], default: [] },
     depositReturnedAt: { type: Date, default: null },
     depositReturnedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', default: null },
     university: { type: mongoose.Schema.Types.ObjectId, ref: 'University', default: null, index: true },
@@ -36,6 +45,7 @@ const studentSchema = new mongoose.Schema(
     hasTemporaryRegistration: { type: Boolean, default: false, index: true },
     temporaryRegistrationMonths: { type: Number, min: 1, max: 12, default: null },
     studentStatus: { type: String, enum: ['green', 'warning', 'red'], default: 'green', index: true },
+    plannedDepartureDate: { type: Date, default: null },
     hasTaxContract: { type: Boolean, default: false, index: true },
     taxContractType: { type: String, enum: ['', 'student_contract', 'standard_contract'], default: '' },
     disciplinaryStatus: { type: String, enum: ['clear', 'monitoring', 'blacklisted'], default: 'clear' },

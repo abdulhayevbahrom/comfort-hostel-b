@@ -21,8 +21,8 @@ class StudentController {
         contractFilter.$and = [{ $or: [{ cancelledAt: { $gte: start, $lt: end } }, { cancelledAt: null, endDate: { $gte: start, $lt: end } }] }]
       }
       const contracts = await StudentContract.find(contractFilter)
-        .populate({ path: 'student', select: 'fullName phone parentPhone photo university faculty course gender jshr', populate: [{ path: 'university', select: 'name shortName' }, { path: 'faculty', select: 'name' }] })
-        .populate('room', 'roomNumber block floor')
+        .populate({ path: 'student', select: 'fullName phone fatherPhone motherPhone photo university faculty course gender jshr', populate: [{ path: 'university', select: 'name shortName' }, { path: 'faculty', select: 'name' }] })
+        .populate('room', 'roomNumber block floor bedLayout')
         .sort({ endDate: -1, cancelledAt: -1 })
       const latestMap = new Map()
       contracts.filter((item) => item.student).forEach((item) => { if (!latestMap.has(item.student.id)) latestMap.set(item.student.id, item) })
@@ -40,15 +40,25 @@ class StudentController {
 
   cleanPayload(body) {
     const normalizePhone = (value) => String(value || '').replace(/\D/g, '').replace(/^998(?=\d{9}$)/, '')
+    const depositPaymentsInput = body.depositPayments && typeof body.depositPayments === 'object' ? body.depositPayments : {}
+    const depositOnlinePaidAt = body.depositOnlinePaidAt ? new Date(body.depositOnlinePaidAt) : null
+    const depositReceivedAt = body.depositReceivedAt ? new Date(body.depositReceivedAt) : null
+    const depositPayments = ['cash', 'online', 'card', 'bank'].map((method) => ({
+      method,
+      amount: Number(depositPaymentsInput[method]) || 0,
+      paidAt: method === 'online' ? depositOnlinePaidAt : depositReceivedAt,
+    })).filter((item) => item.amount > 0)
     const payload = {
       fullName: String(body.fullName || '').trim(),
       phone: normalizePhone(body.phone),
       gender: body.gender,
-      parentPhone: normalizePhone(body.parentPhone),
+      fatherPhone: normalizePhone(body.fatherPhone),
+      motherPhone: normalizePhone(body.motherPhone),
       depositType: ['money', 'passport'].includes(body.depositType) ? body.depositType : 'none',
       depositAmount: Number(body.depositAmount) || 0,
       depositPaymentMethod: body.depositType === 'money' && ['cash', 'online', 'card', 'bank'].includes(body.depositPaymentMethod) ? body.depositPaymentMethod : '',
-      depositReceivedAt: body.depositReceivedAt ? new Date(body.depositReceivedAt) : null,
+      depositReceivedAt,
+      depositPayments: body.depositType === 'money' ? depositPayments : [],
       university: body.university,
       faculty: body.faculty,
       address: String(body.address || '').trim(),
@@ -57,6 +67,7 @@ class StudentController {
       hasTemporaryRegistration: body.hasTemporaryRegistration === true || body.hasTemporaryRegistration === 'true',
       temporaryRegistrationMonths: body.hasTemporaryRegistration === true || body.hasTemporaryRegistration === 'true' ? Number(body.temporaryRegistrationMonths) : null,
       studentStatus: ['green', 'warning', 'red'].includes(body.studentStatus) ? body.studentStatus : 'green',
+      plannedDepartureDate: body.studentStatus === 'red' && body.plannedDepartureDate ? new Date(body.plannedDepartureDate) : null,
       hasTaxContract: body.hasTaxContract === true || body.hasTaxContract === 'true',
       taxContractType: body.hasTaxContract === true || body.hasTaxContract === 'true' ? String(body.taxContractType || '') : '',
       disciplinaryStatus: body.disciplinaryStatus || 'clear',
@@ -81,9 +92,11 @@ class StudentController {
   }
 
   validateConditionalFields(payload, res) {
+    if (payload.studentStatus === 'red' && (!payload.plannedDepartureDate || Number.isNaN(payload.plannedDepartureDate.getTime()))) return ApiResponse.badRequest(res, 'Ketish sanasini tanlang')
     if (payload.depositType !== 'none' && !payload.depositReceivedAt) return ApiResponse.badRequest(res, 'Depozit qabul qilingan sanani kiriting')
     if (payload.depositType === 'money' && (!Number.isFinite(payload.depositAmount) || payload.depositAmount <= 0)) return ApiResponse.badRequest(res, 'Pul depoziti summasini kiriting')
-    if (payload.depositType === 'money' && !payload.depositPaymentMethod) return ApiResponse.badRequest(res, 'Depozit uchun to‘lov turini tanlang')
+    if (payload.depositType === 'money' && payload.depositPayments.reduce((sum, item) => sum + item.amount, 0) > payload.depositAmount) return ApiResponse.badRequest(res, 'Depozit to‘lovlari umumiy depozit summasidan oshmasligi kerak')
+    if (payload.depositType === 'money' && payload.depositPayments.some((item) => !item.paidAt || Number.isNaN(item.paidAt.getTime()))) return ApiResponse.badRequest(res, 'Click to‘lovi sanasini kiriting')
     if (payload.hasTemporaryRegistration && (!Number.isInteger(payload.temporaryRegistrationMonths) || payload.temporaryRegistrationMonths < 1 || payload.temporaryRegistrationMonths > 12)) return ApiResponse.badRequest(res, 'Vaqtinchalik propiska muddatini 1 dan 12 oygacha kiriting')
     if (payload.hasTaxContract && !['student_contract', 'standard_contract'].includes(payload.taxContractType)) return ApiResponse.badRequest(res, 'Soliq shartnomasi turini tanlang')
     if (payload.gender === 'family' && (!payload.zaksSeries || !payload.zaksNumber)) return ApiResponse.badRequest(res, 'Oila uchun ZAKS seriyasi va raqamini kiriting')
@@ -189,7 +202,7 @@ class StudentController {
       const search = String(req.query.search || '').trim()
       if (search) {
         const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-        filter.$or = ['fullName', 'phone', 'jshr', 'passportNumber', 'faceIdCode'].map((field) => ({ [field]: { $regex: escapedSearch, $options: 'i' } }))
+        filter.$or = ['fullName', 'phone', 'fatherPhone', 'motherPhone', 'jshr', 'passportNumber', 'faceIdCode'].map((field) => ({ [field]: { $regex: escapedSearch, $options: 'i' } }))
         const passportSearch = search.replace(/\s/g, '').toUpperCase()
         const passportMatch = passportSearch.match(/^([A-Z]{1,2})(\d{0,7})$/)
         if (passportMatch) {
@@ -222,13 +235,29 @@ class StudentController {
         .sort({ createdAt: -1 })
         .skip((currentPage - 1) * limit)
         .limit(limit)
+      const activeContracts = await StudentContract.find({ student: { $in: students.map((student) => student._id) }, status: 'active' })
+        .select('student endDate bedNumber room')
+        .populate('room', 'roomNumber block floor')
+      const contractByStudent = new Map(activeContracts.map((contract) => [contract.student.toString(), contract]))
       const today = new Date()
-      today.setUTCHours(0, 0, 0, 0)
-      const todayEnd = new Date(today)
-      todayEnd.setUTCHours(23, 59, 59, 999)
-      const activeContracts = await StudentContract.find({ student: { $in: students.map((student) => student._id) }, status: 'active', startDate: { $lte: todayEnd }, endDate: { $gte: today } }).select('student endDate')
-      const contractEndByStudent = new Map(activeContracts.map((contract) => [contract.student.toString(), contract.endDate]))
-      const rows = students.map((student) => ({ ...student.toJSON(), activeContractEndDate: contractEndByStudent.get(student.id) || null }))
+      today.setHours(0, 0, 0, 0)
+      const oneMonthFromToday = new Date(today)
+      oneMonthFromToday.setMonth(oneMonthFromToday.getMonth() + 1)
+      const rows = students.map((student) => {
+        const contract = contractByStudent.get(student.id)
+        const room = contract?.room
+        const bed = room?.bedLayout?.find((item) => item.slotNumbers?.map(Number).includes(Number(contract.bedNumber)))
+        const bedSlotIndex = bed?.slotNumbers?.map(Number).indexOf(Number(contract?.bedNumber))
+        const bedType = bed?.type === 'single' ? '[1]' : bed?.type === 'bunk' ? `[2.${bedSlotIndex === 0 ? 1 : 2}]` : ''
+        const contractExpiresSoon = contract?.endDate && contract.endDate >= today && contract.endDate <= oneMonthFromToday
+        return {
+          ...student.toJSON(),
+          studentStatus: contractExpiresSoon ? 'red' : student.studentStatus,
+          plannedDepartureDate: contractExpiresSoon ? contract.endDate : student.plannedDepartureDate,
+          activeContractEndDate: contract?.endDate || null,
+          activeRoom: room ? { ...room.toJSON(), bedNumber: contract.bedNumber, bedType } : null,
+        }
+      })
       return ApiResponse.ok(res, { students: rows, pagination: { page: currentPage, limit, total, totalPages } })
     } catch (error) { return next(error) }
   }
@@ -256,6 +285,8 @@ class StudentController {
       if (payload.gender === 'family' && !marriageCertificateFile) return ApiResponse.badRequest(res, 'Oila uchun ZAKS qog‘ozi rasmini yuklang')
       payload.photo = photoFile ? (await uploadImages([photoFile]))[0] : null
       payload.marriageCertificate = marriageCertificateFile ? (await uploadImages([marriageCertificateFile]))[0] : null
+      payload.depositPayments = payload.depositPayments.map((payment) => ({ ...payment, receivedBy: req.employee?._id || null }))
+      payload.depositPaymentMethod = payload.depositPayments[0]?.method || ''
       const student = await Student.create(payload)
       await this.syncBlacklist(student)
       await student.populate([{ path: 'university', select: 'name shortName' }, { path: 'faculty', select: 'name' }])
@@ -282,6 +313,8 @@ class StudentController {
       const uploaded = photoFile ? (await uploadImages([photoFile]))[0] : null
       payload.photo = req.body.removePhoto ? null : uploaded || student.photo || null
       payload.marriageCertificate = marriageCertificateFile ? (await uploadImages([marriageCertificateFile]))[0] : student.marriageCertificate || null
+      payload.depositPayments = payload.depositPayments.map((payment) => ({ ...payment, receivedBy: req.employee?._id || null }))
+      payload.depositPaymentMethod = payload.depositPayments[0]?.method || ''
       student.set(payload)
       await student.save()
       await this.syncBlacklist(student)

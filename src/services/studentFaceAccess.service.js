@@ -63,20 +63,25 @@ async function recordAttendance(student, occurredAt, accessEvent) {
   await accessEvent.save()
 }
 
-async function activeContractAndDebt(studentId, occurredAt) {
+async function activeContractAndDebt(student, occurredAt) {
   const start = new Date(occurredAt); start.setHours(0, 0, 0, 0)
   const end = new Date(occurredAt); end.setHours(23, 59, 59, 999)
-  const contracts = await StudentContract.find({ student: studentId, status: 'active', startDate: { $lte: end }, endDate: { $gte: start } }).select('_id')
-  if (!contracts.length) return { hasActiveContract: false, debtAmount: 0, installments: [] }
-  const installments = await ContractInstallment.find({
-    student: studentId,
+  const contracts = await StudentContract.find({ student: student._id, status: 'active', startDate: { $lte: end }, endDate: { $gte: start } }).select('_id')
+  const installments = contracts.length ? await ContractInstallment.find({
+    student: student._id,
     contract: { $in: contracts.map((item) => item._id) },
     dueDate: { $lte: end },
     $expr: { $lt: ['$paidAmount', '$amount'] },
-  }).sort({ dueDate: 1 })
+  }).sort({ dueDate: 1 }) : []
+  let depositDebt = 0
+  if (!student.depositReturnedAt && ['none', 'money'].includes(student.depositType)) {
+    const required = student.depositType === 'none' ? 700000 : Number(student.depositAmount || 700000)
+    const paid = student.depositPayments?.length ? student.depositPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) : student.depositType === 'money' && student.depositReceivedAt ? Number(student.depositAmount || 0) : 0
+    depositDebt = Math.max(0, required - paid)
+  }
   return {
-    hasActiveContract: true,
-    debtAmount: installments.reduce((sum, item) => sum + Math.max(0, item.amount - item.paidAmount), 0),
+    hasActiveContract: contracts.length > 0,
+    debtAmount: installments.reduce((sum, item) => sum + Math.max(0, item.amount - item.paidAmount), 0) + depositDebt,
     installments,
   }
 }
@@ -217,7 +222,7 @@ async function evaluateKnownStudent(student, values, { io } = {}) {
     return resultFromEvent(event)
   }
 
-  const { debtAmount, installments } = await activeContractAndDebt(student._id, occurredAt)
+  const { debtAmount, installments } = await activeContractAndDebt(student, occurredAt)
 
   if (debtAmount <= 0) {
     await FaceAccessState.findOneAndUpdate({ student: student._id, activeDebt: true }, { $set: { activeDebt: false, warningCount: 0, blocked: false, lastDebtAmount: 0, clearedAt: occurredAt } })
@@ -262,7 +267,7 @@ async function evaluateKnownStudent(student, values, { io } = {}) {
   }
 
   const settings = await GeneralSetting.findOneAndUpdate({ key: 'general' }, { $setOnInsert: { key: 'general' } }, { new: true, upsert: true, setDefaultsOnInsert: true })
-  const periodKey = installments[0].periodKey
+  const periodKey = installments[0]?.periodKey || localDateKey(occurredAt).slice(0, 7)
   const content = renderDebtorSms(settings.debtorSmsTemplate, {
     studentName: student.fullName,
     debtAmount: Number(debtAmount).toLocaleString('uz-UZ'),

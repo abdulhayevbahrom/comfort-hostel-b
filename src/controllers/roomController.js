@@ -136,7 +136,7 @@ class RoomController {
       const period = occupancyPeriod(req.query.period)
       if (!period) return ApiResponse.badRequest(res, 'Oy YYYY-MM formatida bo‘lishi kerak')
       const contracts = await StudentContract.find({ room: room._id, status: 'active', startDate: { $lt: period.end }, endDate: { $gte: period.start } })
-        .populate({ path: 'student', select: 'fullName phone parentPhone photo university faculty course gender', populate: [{ path: 'university', select: 'name' }, { path: 'faculty', select: 'name' }] })
+        .populate({ path: 'student', select: 'fullName phone photo university faculty course gender', populate: [{ path: 'university', select: 'name' }, { path: 'faculty', select: 'name' }] })
         .sort({ startDate: 1 })
       const students = contracts.filter((item) => item.student).map((contract) => ({ student: contract.student, contract: { id: contract.id, bedNumber: contract.bedNumber, contractNumber: contract.contractNumber, startDate: contract.startDate, endDate: contract.endDate, paymentType: contract.paymentType, paymentAmount: contract.paymentAmount } }))
       return ApiResponse.ok(res, { room, students, occupiedCount: students.length, availableCount: Math.max(0, room.capacity - students.length) })

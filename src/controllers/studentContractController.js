@@ -227,7 +227,7 @@ class StudentContractController {
       }, { total: 0, active: 0, completed: 0, cancelled: 0, amount: 0 });
       summary.amount = currentMonthRows[0]?.amount || 0;
       const contracts = await StudentContract.find(filter)
-        .populate({ path: "student", select: "fullName phone parentPhone photo university faculty course gender hasTaxContract taxContractType", populate: [{ path: "university", select: "name shortName" }, { path: "faculty", select: "name" }] })
+        .populate({ path: "student", select: "fullName phone fatherPhone motherPhone photo university faculty course gender hasTaxContract taxContractType", populate: [{ path: "university", select: "name shortName" }, { path: "faculty", select: "name" }] })
         .populate("room", "roomNumber block floor")
         .sort({ createdAt: -1 });
       const search = String(req.query.search || "").trim().toLowerCase();
