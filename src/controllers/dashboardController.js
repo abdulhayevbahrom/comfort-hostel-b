@@ -27,6 +27,7 @@ const sumField = async (Model, match, field = 'amount') => {
 }
 const hostelUnitFilter = { businessUnit: { $ne: 'shop' } }
 const centralizedPaymentFilter = { $or: [{ cashSession: null }, { cashSession: { $exists: false } }] }
+const cashSessionAccountingDate = { $ifNull: ['$reviewedAt', { $ifNull: ['$closedAt', '$createdAt'] }] }
 
 const recentPeriods = (now, count = 6) => Array.from({ length: count }, (_, index) => {
   const date = new Date(now.getFullYear(), now.getMonth() - (count - 1 - index), 1)
@@ -64,7 +65,73 @@ class DashboardController {
       rangeEnd.setDate(rangeEnd.getDate() + 1)
       const selectedDayEnd = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate(), 23, 59, 59, 999)
       const activeContractFilter = { status: { $in: ['active', 'completed'] }, startDate: { $lte: selectedDayEnd }, endDate: { $gte: dayStart } }
+      const trendStart = new Date(now.getFullYear(), now.getMonth() - 5, 1)
+      const periodKeys = recentPeriods(now)
+      const legacyBase = { depositType: 'money', depositReceivedAt: { $ne: null }, 'depositPayments.0': { $exists: false } }
+      const centralTransferFilter = { status: 'approved', $or: [{ transferStage: 'head_to_owner' }, { transferStage: null }] }
+      const mainPromise = Promise.all([
+        Room.find().select('capacity status').lean(),
+        StudentContract.find(activeContractFilter).select('student room').lean(),
+        Employee.find({ isActive: true, ...hostelUnitFilter }).select('salary').lean(),
+        sumField(Payment, { ...centralizedPaymentFilter, createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
+        sumField(FinePayment, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
+        sumField(Expense, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
+        sumField(SalaryPayment, { createdAt: { $gte: rangeStart, $lt: rangeEnd }, ...hostelUnitFilter }),
+        ContractInstallment.find({ dueDate: { $lte: selectedDayEnd } }).select('student contract amount paidAmount status dueDate').populate('student', 'fullName').populate({ path: 'contract', select: 'status room', populate: { path: 'room', select: 'roomNumber block' } }).lean(),
+        Fine.find({ $expr: { $lt: ['$paidAmount', '$amount'] } }).select('amount paidAmount student').lean(),
+        Attendance.find({ attendanceDate: dayKey }).select('status').lean(),
+        Payment.find({ ...centralizedPaymentFilter, createdAt: { $gte: rangeStart, $lt: rangeEnd } }).populate('student', 'fullName').sort({ createdAt: -1 }).limit(5).lean(),
+        FinePayment.find({ createdAt: { $gte: rangeStart, $lt: rangeEnd } }).populate('student', 'fullName').sort({ createdAt: -1 }).limit(5).lean(),
+        Expense.find({ createdAt: { $gte: rangeStart, $lt: rangeEnd } }).populate('createdBy', 'firstname lastname').sort({ createdAt: -1 }).limit(5).lean(),
+        SalaryPayment.find({ createdAt: { $gte: rangeStart, $lt: rangeEnd }, ...hostelUnitFilter }).populate('employee', 'firstname lastname').sort({ createdAt: -1 }).limit(5).lean(),
+        Payment.aggregate([{ $match: { ...centralizedPaymentFilter, createdAt: { $gte: trendStart } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
+        FinePayment.aggregate([{ $match: { createdAt: { $gte: trendStart } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
+        Expense.aggregate([{ $match: { createdAt: { $gte: trendStart } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
+        SalaryPayment.aggregate([{ $match: { period: { $gte: periodKeys[0] }, ...hostelUnitFilter } }, { $group: { _id: '$period', amount: { $sum: '$amount' } } }]),
+        sumField(Payment, { ...centralizedPaymentFilter, createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
+        sumField(FinePayment, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
+        sumField(Expense, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
+        Payment.aggregate([{ $match: { ...centralizedPaymentFilter, createdAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: '$method', amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
+        FinePayment.aggregate([{ $match: { createdAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: '$method', amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
+        Payment.aggregate([{ $match: { ...centralizedPaymentFilter, createdAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
+        FinePayment.aggregate([{ $match: { createdAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
+        Expense.aggregate([{ $match: { createdAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
+        Payment.aggregate([{ $match: { ...centralizedPaymentFilter, createdAt: { $gte: dayStart, $lt: dayEnd } } }, { $group: { _id: '$method', amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
+        FinePayment.aggregate([{ $match: { createdAt: { $gte: dayStart, $lt: dayEnd } } }, { $group: { _id: '$method', amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
+      ])
+      const depositPromise = Promise.all([
+        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: rangeStart, $lt: rangeEnd }, $or: [{ 'depositPayments.cashSession': null }, { 'depositPayments.cashSession': { $exists: false } }] } }, { $group: { _id: null, amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: trendStart }, $or: [{ 'depositPayments.cashSession': null }, { 'depositPayments.cashSession': { $exists: false } }] } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$depositPayments.paidAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
+        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: rangeStart, $lt: rangeEnd }, $or: [{ 'depositPayments.cashSession': null }, { 'depositPayments.cashSession': { $exists: false } }] } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$depositPayments.paidAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
+        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: rangeStart, $lt: rangeEnd }, $or: [{ 'depositPayments.cashSession': null }, { 'depositPayments.cashSession': { $exists: false } }] } }, { $group: { _id: '$depositPayments.method', amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: dayStart, $lt: dayEnd }, $or: [{ 'depositPayments.cashSession': null }, { 'depositPayments.cashSession': { $exists: false } }] } }, { $group: { _id: '$depositPayments.method', amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $match: { depositType: 'money', depositReturnedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $unwind: '$depositPayments' }, { $group: { _id: null, amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $match: { depositType: 'money', depositReturnedAt: { $gte: trendStart } } }, { $unwind: '$depositPayments' }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$depositReturnedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
+        Student.aggregate([{ $match: { depositType: 'money', depositReturnedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $unwind: '$depositPayments' }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$depositReturnedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
+        Student.aggregate([{ $match: { depositType: 'money', depositReturnedAt: { $gte: dayStart, $lt: dayEnd } } }, { $unwind: '$depositPayments' }, { $group: { _id: null, amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
+      ])
+      const legacyPromise = Promise.all([
+        Student.aggregate([{ $match: { ...legacyBase, depositReceivedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: null, amount: { $sum: '$depositAmount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $match: { ...legacyBase, depositReceivedAt: { $gte: trendStart } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$depositReceivedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositAmount' } } }]),
+        Student.aggregate([{ $match: { ...legacyBase, depositReceivedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$depositReceivedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositAmount' } } }]),
+        Student.aggregate([{ $match: { ...legacyBase, depositReceivedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $cond: [{ $in: ['$depositPaymentMethod', ['cash', 'online', 'card', 'bank']] }, '$depositPaymentMethod', 'cash'] }, amount: { $sum: '$depositAmount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $match: { ...legacyBase, depositReceivedAt: { $gte: dayStart, $lt: dayEnd } } }, { $group: { _id: { $cond: [{ $in: ['$depositPaymentMethod', ['cash', 'online', 'card', 'bank']] }, '$depositPaymentMethod', 'cash'] }, amount: { $sum: '$depositAmount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $match: { ...legacyBase, depositReturnedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: null, amount: { $sum: '$depositAmount' }, count: { $sum: 1 } } }]),
+        Student.aggregate([{ $match: { ...legacyBase, depositReturnedAt: { $gte: trendStart } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$depositReturnedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositAmount' } } }]),
+        Student.aggregate([{ $match: { ...legacyBase, depositReturnedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$depositReturnedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositAmount' } } }]),
+        Student.aggregate([{ $match: { ...legacyBase, depositReturnedAt: { $gte: dayStart, $lt: dayEnd } } }, { $group: { _id: null, amount: { $sum: '$depositAmount' }, count: { $sum: 1 } } }]),
+      ])
+      const centralPromise = Promise.all([
+        CashSession.aggregate([{ $match: centralTransferFilter }, { $addFields: { accountingDate: cashSessionAccountingDate, accountingAmount: { $ifNull: ['$receivedAmount', '$expectedAmount'] } } }, { $match: { accountingDate: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: null, total: { $sum: '$accountingAmount' }, count: { $sum: 1 } } }]).then(([row]) => ({ amount: row?.total || 0, count: row?.count || 0 })),
+        CashSession.aggregate([{ $match: centralTransferFilter }, { $addFields: { accountingDate: cashSessionAccountingDate, accountingAmount: { $ifNull: ['$receivedAmount', '$expectedAmount'] } } }, { $match: { accountingDate: { $gte: trendStart } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$accountingDate', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$accountingAmount' } } }]),
+        CashSession.aggregate([{ $match: centralTransferFilter }, { $addFields: { accountingDate: cashSessionAccountingDate, accountingAmount: { $ifNull: ['$receivedAmount', '$expectedAmount'] } } }, { $match: { accountingDate: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$accountingDate', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$accountingAmount' } } }]),
+        CashSession.aggregate([{ $match: centralTransferFilter }, { $addFields: { accountingDate: cashSessionAccountingDate } }, { $match: { accountingDate: { $gte: rangeStart, $lt: rangeEnd } } }, { $project: { methods: { $objectToArray: '$breakdown' } } }, { $unwind: '$methods' }, { $group: { _id: '$methods.k', amount: { $sum: '$methods.v' }, count: { $sum: { $cond: [{ $gt: ['$methods.v', 0] }, 1, 0] } } } }]),
+        CashSession.aggregate([{ $match: centralTransferFilter }, { $addFields: { accountingDate: cashSessionAccountingDate } }, { $match: { accountingDate: { $gte: dayStart, $lt: dayEnd } } }, { $project: { methods: { $objectToArray: '$breakdown' } } }, { $unwind: '$methods' }, { $group: { _id: '$methods.k', amount: { $sum: '$methods.v' }, count: { $sum: { $cond: [{ $gt: ['$methods.v', 0] }, 1, 0] } } } }]),
+      ])
+      const depositStudentsPromise = Student.find({ depositReturnedAt: null, depositType: { $in: ['none', 'money'] } }).select('depositType depositAmount depositReceivedAt depositPayments').lean()
+
       const [
+        [
         rooms,
         activeContracts,
         employees,
@@ -93,60 +160,12 @@ class DashboardController {
         dailyExpenses,
         dailyPaymentMethods,
         dailyFinePaymentMethods,
-      ] = await Promise.all([
-        Room.find().select('capacity status'),
-        StudentContract.find(activeContractFilter).select('student room'),
-        Employee.find({ isActive: true, ...hostelUnitFilter }).select('salary'),
-        sumField(Payment, { ...centralizedPaymentFilter, createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
-        sumField(FinePayment, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
-        sumField(Expense, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
-        sumField(SalaryPayment, { createdAt: { $gte: rangeStart, $lt: rangeEnd }, ...hostelUnitFilter }),
-        ContractInstallment.find({ dueDate: { $lte: selectedDayEnd } }).select('student contract amount paidAmount status dueDate').populate('student', 'fullName').populate({ path: 'contract', select: 'status room', populate: { path: 'room', select: 'roomNumber block' } }),
-        Fine.find({ $expr: { $lt: ['$paidAmount', '$amount'] } }).select('amount paidAmount student'),
-        Attendance.find({ attendanceDate: dayKey }).select('status'),
-        Payment.find({ ...centralizedPaymentFilter, createdAt: { $gte: rangeStart, $lt: rangeEnd } }).populate('student', 'fullName').sort({ createdAt: -1 }).limit(5),
-        FinePayment.find({ createdAt: { $gte: rangeStart, $lt: rangeEnd } }).populate('student', 'fullName').sort({ createdAt: -1 }).limit(5),
-        Expense.find({ createdAt: { $gte: rangeStart, $lt: rangeEnd } }).populate('createdBy', 'firstname lastname').sort({ createdAt: -1 }).limit(5),
-        SalaryPayment.find({ createdAt: { $gte: rangeStart, $lt: rangeEnd }, ...hostelUnitFilter }).populate('employee', 'firstname lastname').sort({ createdAt: -1 }).limit(5),
-        Payment.aggregate([{ $match: { ...centralizedPaymentFilter, createdAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
-        FinePayment.aggregate([{ $match: { createdAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
-        Expense.aggregate([{ $match: { createdAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
-        SalaryPayment.aggregate([{ $match: { period: { $gte: recentPeriods(now)[0] }, ...hostelUnitFilter } }, { $group: { _id: '$period', amount: { $sum: '$amount' } } }]),
-        sumField(Payment, { ...centralizedPaymentFilter, createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
-        sumField(FinePayment, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
-        sumField(Expense, { createdAt: { $gte: rangeStart, $lt: rangeEnd } }),
-        Payment.aggregate([{ $match: { ...centralizedPaymentFilter, createdAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: '$method', amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
-        FinePayment.aggregate([{ $match: { createdAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: '$method', amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
-        Payment.aggregate([{ $match: { ...centralizedPaymentFilter, createdAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
-        FinePayment.aggregate([{ $match: { createdAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
-        Expense.aggregate([{ $match: { createdAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$amount' } } }]),
-        Payment.aggregate([{ $match: { ...centralizedPaymentFilter, createdAt: { $gte: dayStart, $lt: dayEnd } } }, { $group: { _id: '$method', amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
-        FinePayment.aggregate([{ $match: { createdAt: { $gte: dayStart, $lt: dayEnd } } }, { $group: { _id: '$method', amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
-      ])
-
-      const [depositIncomeRows, depositTrend, dailyDepositIncome, dailyDepositMethods, todayDepositIncomeRows, returnedDepositRows, returnedDepositTrend, dailyReturnedDeposits, todayReturnedDepositRows] = await Promise.all([
-        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: rangeStart, $lt: rangeEnd }, $or: [{ 'depositPayments.cashSession': null }, { 'depositPayments.cashSession': { $exists: false } }] } }, { $group: { _id: null, amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
-        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) }, $or: [{ 'depositPayments.cashSession': null }, { 'depositPayments.cashSession': { $exists: false } }] } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$depositPayments.paidAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
-        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: rangeStart, $lt: rangeEnd }, $or: [{ 'depositPayments.cashSession': null }, { 'depositPayments.cashSession': { $exists: false } }] } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$depositPayments.paidAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
-        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: rangeStart, $lt: rangeEnd }, $or: [{ 'depositPayments.cashSession': null }, { 'depositPayments.cashSession': { $exists: false } }] } }, { $group: { _id: '$depositPayments.method', amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
-        Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { 'depositPayments.paidAt': { $gte: dayStart, $lt: dayEnd }, $or: [{ 'depositPayments.cashSession': null }, { 'depositPayments.cashSession': { $exists: false } }] } }, { $group: { _id: '$depositPayments.method', amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
-        Student.aggregate([{ $match: { depositType: 'money', depositReturnedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $unwind: '$depositPayments' }, { $group: { _id: null, amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
-        Student.aggregate([{ $match: { depositType: 'money', depositReturnedAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $unwind: '$depositPayments' }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$depositReturnedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
-        Student.aggregate([{ $match: { depositType: 'money', depositReturnedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $unwind: '$depositPayments' }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$depositReturnedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositPayments.amount' } } }]),
-        Student.aggregate([{ $match: { depositType: 'money', depositReturnedAt: { $gte: dayStart, $lt: dayEnd } } }, { $unwind: '$depositPayments' }, { $group: { _id: null, amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } }]),
-      ])
-      const legacyBase = { depositType: 'money', depositReceivedAt: { $ne: null }, 'depositPayments.0': { $exists: false } }
-      const [legacyIncomeRows, legacyTrend, legacyDailyIncome, legacyMethods, legacyTodayMethods, legacyReturnedRows, legacyReturnedTrend, legacyDailyReturns, legacyTodayReturnedRows] = await Promise.all([
-        Student.aggregate([{ $match: { ...legacyBase, depositReceivedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: null, amount: { $sum: '$depositAmount' }, count: { $sum: 1 } } }]),
-        Student.aggregate([{ $match: { ...legacyBase, depositReceivedAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$depositReceivedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositAmount' } } }]),
-        Student.aggregate([{ $match: { ...legacyBase, depositReceivedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$depositReceivedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositAmount' } } }]),
-        Student.aggregate([{ $match: { ...legacyBase, depositReceivedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $cond: [{ $in: ['$depositPaymentMethod', ['cash', 'online', 'card', 'bank']] }, '$depositPaymentMethod', 'cash'] }, amount: { $sum: '$depositAmount' }, count: { $sum: 1 } } }]),
-        Student.aggregate([{ $match: { ...legacyBase, depositReceivedAt: { $gte: dayStart, $lt: dayEnd } } }, { $group: { _id: { $cond: [{ $in: ['$depositPaymentMethod', ['cash', 'online', 'card', 'bank']] }, '$depositPaymentMethod', 'cash'] }, amount: { $sum: '$depositAmount' }, count: { $sum: 1 } } }]),
-        Student.aggregate([{ $match: { ...legacyBase, depositReturnedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: null, amount: { $sum: '$depositAmount' }, count: { $sum: 1 } } }]),
-        Student.aggregate([{ $match: { ...legacyBase, depositReturnedAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$depositReturnedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositAmount' } } }]),
-        Student.aggregate([{ $match: { ...legacyBase, depositReturnedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$depositReturnedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$depositAmount' } } }]),
-        Student.aggregate([{ $match: { ...legacyBase, depositReturnedAt: { $gte: dayStart, $lt: dayEnd } } }, { $group: { _id: null, amount: { $sum: '$depositAmount' }, count: { $sum: 1 } } }]),
-      ])
+      ],
+      [depositIncomeRows, depositTrend, dailyDepositIncome, dailyDepositMethods, todayDepositIncomeRows, returnedDepositRows, returnedDepositTrend, dailyReturnedDeposits, todayReturnedDepositRows],
+      [legacyIncomeRows, legacyTrend, legacyDailyIncome, legacyMethods, legacyTodayMethods, legacyReturnedRows, legacyReturnedTrend, legacyDailyReturns, legacyTodayReturnedRows],
+      [centralTransferIncome, centralTransferTrend, centralTransferDaily, centralTransferMethods, centralTransferTodayMethods],
+      depositStudents,
+      ] = await Promise.all([mainPromise, depositPromise, legacyPromise, centralPromise, depositStudentsPromise])
       depositTrend.push(...legacyTrend)
       dailyDepositIncome.push(...legacyDailyIncome)
       dailyDepositMethods.push(...legacyMethods)
@@ -164,7 +183,6 @@ class DashboardController {
       returnedDeposit.count += legacyReturnedRows[0]?.count || 0
       todayReturnedDeposit.amount += legacyTodayReturnedRows[0]?.amount || 0
       todayReturnedDeposit.count += legacyTodayReturnedRows[0]?.count || 0
-      const depositStudents = await Student.find({ depositReturnedAt: null, depositType: { $in: ['none', 'money'] } }).select('depositType depositAmount depositReceivedAt depositPayments')
       const depositDebtSummary = depositStudents.reduce((summary, student) => {
         const required = student.depositType === 'none' ? 700000 : Number(student.depositAmount || 700000)
         const paid = student.depositPayments?.length
@@ -197,14 +215,6 @@ class DashboardController {
       attendance.forEach((item) => { attendanceSummary[item.status] += 1 })
       attendanceSummary.unmarked = Math.max(0, attendanceSummary.total - attendance.length)
       const salaryFund = employees.reduce((sum, item) => sum + Number(item.salary || 0), 0)
-      const centralTransferFilter = { status: 'approved', $or: [{ transferStage: 'head_to_owner' }, { transferStage: null }] }
-      const [centralTransferIncome, centralTransferTrend, centralTransferDaily, centralTransferMethods, centralTransferTodayMethods] = await Promise.all([
-        sumField(CashSession, { ...centralTransferFilter, reviewedAt: { $gte: rangeStart, $lt: rangeEnd } }, 'receivedAmount'),
-        CashSession.aggregate([{ $match: { ...centralTransferFilter, reviewedAt: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) } } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$reviewedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$receivedAmount' } } }]),
-        CashSession.aggregate([{ $match: { ...centralTransferFilter, reviewedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$reviewedAt', timezone: 'Asia/Tashkent' } }, amount: { $sum: '$receivedAmount' } } }]),
-        CashSession.aggregate([{ $match: { ...centralTransferFilter, reviewedAt: { $gte: rangeStart, $lt: rangeEnd } } }, { $project: { methods: { $objectToArray: '$breakdown' } } }, { $unwind: '$methods' }, { $group: { _id: '$methods.k', amount: { $sum: '$methods.v' }, count: { $sum: { $cond: [{ $gt: ['$methods.v', 0] }, 1, 0] } } } }]),
-        CashSession.aggregate([{ $match: { ...centralTransferFilter, reviewedAt: { $gte: dayStart, $lt: dayEnd } } }, { $project: { methods: { $objectToArray: '$breakdown' } } }, { $unwind: '$methods' }, { $group: { _id: '$methods.k', amount: { $sum: '$methods.v' }, count: { $sum: { $cond: [{ $gt: ['$methods.v', 0] }, 1, 0] } } } }]),
-      ])
       income.amount += centralTransferIncome.amount
       income.count += centralTransferIncome.count
       todayIncome.amount += centralTransferTodayMethods.reduce((sum, item) => sum + Number(item.amount || 0), 0)
@@ -215,8 +225,8 @@ class DashboardController {
       dailyPaymentMethods.push(...centralTransferTodayMethods)
       const totalIncome = income.amount + monthlyFineIncome.amount + depositIncome.amount
       const totalIncomeCount = income.count + monthlyFineIncome.count + depositIncome.count
-      const totalTodayIncome = todayIncome.amount + todayFineIncome.amount + todayDepositIncome
-      const totalTodayIncomeCount = todayIncome.count + todayFineIncome.count + todayDepositCount
+      const totalTodayIncome = totalIncome
+      const totalTodayIncomeCount = totalIncomeCount
       const outflow = expenses.amount + salaryPaid.amount + returnedDeposit.amount
       const trendMap = (rows) => rows.reduce((result, item) => result.set(item._id, (result.get(item._id) || 0) + Number(item.amount || 0)), new Map())
       const incomeByPeriod = trendMap(incomeTrend)
@@ -225,7 +235,7 @@ class DashboardController {
       const expenseByPeriod = trendMap(expenseTrend)
       const salaryByPeriod = trendMap(salaryTrend)
       const returnedDepositByPeriod = trendMap(returnedDepositTrend)
-      const trends = recentPeriods(now).map((period) => ({ period, income: (incomeByPeriod.get(period) || 0) + (fineIncomeByPeriod.get(period) || 0) + (depositIncomeByPeriod.get(period) || 0), expenses: (expenseByPeriod.get(period) || 0) + (returnedDepositByPeriod.get(period) || 0), salaries: salaryByPeriod.get(period) || 0 }))
+      const trends = periodKeys.map((period) => ({ period, income: (incomeByPeriod.get(period) || 0) + (fineIncomeByPeriod.get(period) || 0) + (depositIncomeByPeriod.get(period) || 0), expenses: (expenseByPeriod.get(period) || 0) + (returnedDepositByPeriod.get(period) || 0), salaries: salaryByPeriod.get(period) || 0 }))
       const dailyIncomeMap = new Map(dailyIncome.map((item) => [item._id, item.amount]))
       const dailyFineIncomeMap = new Map(dailyFineIncome.map((item) => [item._id, item.amount]))
       const dailyDepositIncomeMap = new Map(dailyDepositIncome.map((item) => [item._id, item.amount]))
@@ -256,7 +266,7 @@ class DashboardController {
         dateRange: { start: rangeStartKey, end: rangeEndKey },
         students: { active: activeStudentIds.size },
         rooms: { total: rooms.length, available: usableRooms.length, maintenance: rooms.length - usableRooms.length, capacity: totalCapacity, occupied: occupiedBeds, free: Math.max(0, totalCapacity - occupiedBeds), occupancyRate: totalCapacity ? Math.round((occupiedBeds / totalCapacity) * 100) : 0 },
-        finance: { income: totalIncome, incomeCount: totalIncomeCount, fineIncome: monthlyFineIncome.amount, fineIncomeCount: monthlyFineIncome.count, depositIncome: depositIncome.amount, depositIncomeCount: depositIncome.count, returnedDeposit: returnedDeposit.amount, returnedDepositCount: returnedDeposit.count, expenses: expenses.amount + returnedDeposit.amount, expenseCount: expenses.count + returnedDeposit.count, salaryPaid: salaryPaid.amount, salaryPaymentCount: salaryPaid.count, salaryFund, outflow, balance: totalIncome - outflow, todayIncome: totalTodayIncome, todayIncomeCount: totalTodayIncomeCount, todayFineIncome: todayFineIncome.amount, todayReturnedDeposit: todayReturnedDeposit.amount, todayExpense: todayExpense.amount + todayReturnedDeposit.amount, todayBalance: totalTodayIncome - todayExpense.amount - todayReturnedDeposit.amount },
+        finance: { income: totalIncome, incomeCount: totalIncomeCount, fineIncome: monthlyFineIncome.amount, fineIncomeCount: monthlyFineIncome.count, depositIncome: depositIncome.amount, depositIncomeCount: depositIncome.count, returnedDeposit: returnedDeposit.amount, returnedDepositCount: returnedDeposit.count, expenses: expenses.amount + returnedDeposit.amount, expenseCount: expenses.count + returnedDeposit.count, salaryPaid: salaryPaid.amount, salaryPaymentCount: salaryPaid.count, salaryFund, outflow, balance: totalIncome - outflow, todayIncome: totalTodayIncome, todayIncomeCount: totalTodayIncomeCount, todayFineIncome: monthlyFineIncome.amount, todayReturnedDeposit: returnedDeposit.amount, todayExpense: expenses.amount + returnedDeposit.amount, todayBalance: totalTodayIncome - expenses.amount - returnedDeposit.amount },
         debt: { amount: debtAmount, students: debtorCount, fineAmount: fineDebt, fineStudents: fineStudentCount, depositAmount: depositDebtSummary.amount, depositStudents: depositDebtSummary.students },
         attendance: attendanceSummary,
         employees: { active: employees.length },

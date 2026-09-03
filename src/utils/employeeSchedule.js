@@ -6,6 +6,7 @@ import { shiftCrossesMidnight } from './faceTime.js'
 export const DEFAULT_EMPLOYEE_SCHEDULE = Object.freeze({
   checkInTime: '09:00',
   checkOutTime: '18:00',
+  offDates: [],
   workDays: [1, 2, 3, 4, 5, 6],
   lateAfterMinutes: 0,
   earlyLeaveMinutes: 0,
@@ -21,12 +22,25 @@ export function normalizeEmployeeSchedule(schedule = {}) {
   return {
     checkInTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(schedule.checkInTime || '') ? schedule.checkInTime : DEFAULT_EMPLOYEE_SCHEDULE.checkInTime,
     checkOutTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(schedule.checkOutTime || '') ? schedule.checkOutTime : DEFAULT_EMPLOYEE_SCHEDULE.checkOutTime,
+    offDates: Array.isArray(schedule.offDates) ? [...new Set(schedule.offDates.filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(String(date))))].sort() : [],
     workDays: workDays.length ? workDays : DEFAULT_EMPLOYEE_SCHEDULE.workDays,
     lateAfterMinutes: Math.max(0, Number(schedule.lateAfterMinutes || 0)),
     earlyLeaveMinutes: Math.max(0, Number(schedule.earlyLeaveMinutes || 0)),
     useTimePenalty: schedule.useTimePenalty === true,
     penaltyPerMinute: Math.max(0, Number(schedule.penaltyPerMinute || 0)),
     penaltyStartDate: /^\d{4}-\d{2}-\d{2}$/.test(schedule.penaltyStartDate || '') ? schedule.penaltyStartDate : DEFAULT_EMPLOYEE_SCHEDULE.penaltyStartDate,
+  }
+}
+
+export function employeeSchedule(employee, fallbackSchedule = DEFAULT_EMPLOYEE_SCHEDULE) {
+  const base = normalizeEmployeeSchedule(fallbackSchedule)
+  const own = employee?.workSchedule?.toObject?.() || employee?.workSchedule || {}
+  return {
+    ...base,
+    checkInTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(own.checkInTime || '') ? own.checkInTime : base.checkInTime,
+    checkOutTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(own.checkOutTime || '') ? own.checkOutTime : base.checkOutTime,
+    workDays: [0, 1, 2, 3, 4, 5, 6],
+    offDates: Array.isArray(own.offDates) ? [...new Set(own.offDates.filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(String(date))))].sort() : [],
   }
 }
 
@@ -51,10 +65,10 @@ function scheduledExitAt(date, schedule) {
 export async function reconcileScheduledEmployeeExits(schedule, now = new Date()) {
   const hasOutDevice = Boolean(await FaceDevice.exists({ isActive: true, direction: { $in: ['OUT', 'BOTH'] } }))
   if (hasOutDevice) return { hasOutDevice, updated: 0 }
-  const records = await EmployeeAttendance.find({ currentEntry: { $ne: null } })
+  const records = await EmployeeAttendance.find({ currentEntry: { $ne: null } }).populate('employee', 'workSchedule')
   let updated = 0
   for (const attendance of records) {
-    const plannedExit = scheduledExitAt(attendance.date, schedule)
+    const plannedExit = scheduledExitAt(attendance.date, employeeSchedule(attendance.employee, schedule))
     if (plannedExit > now) continue
     attendance.totalHours += Math.max(0, plannedExit - attendance.currentEntry) / 3_600_000
     attendance.lastExit = plannedExit

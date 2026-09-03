@@ -43,18 +43,12 @@ const transferredBreakdown = async (sourceSession) => {
 
 const openSessionBalance = async (session) => {
   if (!session) return { breakdown: emptyBreakdown(), balance: 0, paymentCount: 0 }
-  const [payments, deposits, incoming] = await Promise.all([
-    sumPaymentsByMethod({ cashSession: session._id }),
-    sumDepositsByMethod(session._id),
-    CashSession.find({ destinationSession: session._id, status: 'approved' }).select('breakdown').lean(),
-  ])
-  const transferred = await transferredBreakdown(session._id)
+  const contributors = await sessionContributors(session._id)
   const breakdown = emptyBreakdown()
-  methods.forEach((method) => {
-    const incomingAmount = incoming.reduce((sum, transfer) => sum + Number(transfer.breakdown?.[method] || 0), 0)
-    breakdown[method] = Math.max(0, payments.breakdown[method] + deposits.breakdown[method] + incomingAmount - transferred[method])
+  contributors.forEach((item) => {
+    if (methods.includes(item.method)) breakdown[item.method] += Number(item.amount || 0)
   })
-  return { breakdown, balance: totalBreakdown(breakdown), paymentCount: payments.count + deposits.count }
+  return { breakdown, balance: totalBreakdown(breakdown), paymentCount: contributors.length }
 }
 
 const allocateContributors = (contributors, breakdown) => {
@@ -100,7 +94,8 @@ const sessionContributors = async (sessionId) => {
   ]
   const previousTransfers = await CashSession.find({ sourceSession: sessionId, status: { $in: ['pending', 'approved'] } }).select('contributors breakdown').sort({ closedAt: 1, createdAt: 1 }).lean()
   previousTransfers.forEach((transfer) => {
-    const used = transfer.contributors?.length ? transfer.contributors : allocateContributors(contributors, transfer.breakdown)
+    const eligible = contributors.filter((item) => !item.paidAt || !transfer.closedAt || new Date(item.paidAt) <= new Date(transfer.closedAt))
+    const used = transfer.contributors?.length ? transfer.contributors : allocateContributors(eligible, transfer.breakdown)
     contributors = reduceContributors(contributors, used)
   })
   return contributors
@@ -113,16 +108,18 @@ class CashSessionController {
 
   list = async (req, res, next) => {
     try {
+      const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || '')) ? String(req.query.date) : ''
+      const historyDateFilter = dateKey ? { closedAt: { $gte: new Date(`${dateKey}T00:00:00`), $lte: new Date(`${dateKey}T23:59:59.999`) } } : {}
       if (['cashier', 'head_cashier'].includes(req.employee.role)) {
         const openSession = await CashSession.findOne({ cashier: req.employee._id, status: 'open' })
         const open = await openSessionBalance(openSession)
-        const sessions = await CashSession.find({ cashier: req.employee._id, status: { $ne: 'open' } })
+        const sessions = await CashSession.find({ cashier: req.employee._id, status: { $ne: 'open' }, ...historyDateFilter })
           .populate('reviewedBy', 'firstname lastname').sort({ closedAt: -1 }).limit(30)
         const pendingAmount = sessions.filter((item) => item.status === 'pending').reduce((sum, item) => sum + item.expectedAmount, 0)
         if (req.employee.role === 'cashier') return ApiResponse.ok(res, { role: 'cashier', open: { id: openSession?.id || null, ...open }, pendingAmount, sessions })
         const [incomingSessions, reviewedIncoming] = await Promise.all([
           CashSession.find({ transferStage: 'cashier_to_head', status: 'pending' }).populate('cashier', 'firstname lastname position').sort({ closedAt: 1 }),
-          CashSession.find({ transferStage: 'cashier_to_head', status: { $in: ['approved', 'rejected'] }, reviewedBy: req.employee._id }).populate('cashier', 'firstname lastname position').sort({ reviewedAt: -1 }).limit(30),
+          CashSession.find({ transferStage: 'cashier_to_head', status: { $in: ['approved', 'rejected'] }, reviewedBy: req.employee._id, ...historyDateFilter }).populate('cashier', 'firstname lastname position').sort({ reviewedAt: -1 }).limit(30),
         ])
         return ApiResponse.ok(res, { role: 'head_cashier', open: { id: openSession?.id || null, ...open }, pendingAmount, sessions, pendingSessions: incomingSessions, recentIncoming: reviewedIncoming })
       }
@@ -130,9 +127,9 @@ class CashSessionController {
       if (!['owner', 'admin'].includes(req.employee.role)) return ApiResponse.forbidden(res, 'Kassa faqat kassir va owner uchun ochiq')
       const [pendingSessions, recentSessions, organizationPayments, approvedTransfers, openSessions, depositRows, returnedDepositRows, legacyDepositRows, legacyReturnedDepositRows] = await Promise.all([
         CashSession.find({ status: 'pending', $or: [{ transferStage: 'head_to_owner' }, { transferStage: null }] }).populate('cashier', 'firstname lastname position role').sort({ closedAt: 1 }),
-        CashSession.find({ status: { $in: ['approved', 'rejected'] }, $or: [{ transferStage: 'head_to_owner' }, { transferStage: null }] }).populate('cashier', 'firstname lastname position role').populate('reviewedBy', 'firstname lastname').sort({ reviewedAt: -1 }).limit(30),
+        CashSession.find({ status: { $in: ['approved', 'rejected'] }, $or: [{ transferStage: 'head_to_owner' }, { transferStage: null }], ...historyDateFilter }).populate('cashier', 'firstname lastname position role').populate('reviewedBy', 'firstname lastname').sort({ reviewedAt: -1 }).limit(30),
         sumPaymentsByMethod({ $or: [{ fundHolder: 'organization' }, { fundHolder: { $exists: false }, cashSession: null }] }),
-        CashSession.find({ status: 'approved', $or: [{ transferStage: 'head_to_owner' }, { transferStage: null }] }).select('sourceSession transferStage breakdown expectedAmount').lean(),
+        CashSession.find({ status: 'approved', $or: [{ transferStage: 'head_to_owner' }, { transferStage: null }] }).select('sourceSession transferStage breakdown expectedAmount receivedAmount').lean(),
         CashSession.find({ status: 'open' }).populate('cashier', 'firstname lastname position'),
         Student.aggregate([{ $unwind: '$depositPayments' }, { $match: { $or: [{ 'depositPayments.cashSession': null }, { 'depositPayments.cashSession': { $exists: false } }] } }, { $group: { _id: '$depositPayments.method', amount: { $sum: '$depositPayments.amount' } } }]),
         Student.aggregate([{ $match: { depositType: 'money', depositReturnedAt: { $ne: null } } }, { $unwind: '$depositPayments' }, { $group: { _id: '$depositPayments.method', amount: { $sum: '$depositPayments.amount' } } }]),
@@ -146,7 +143,9 @@ class CashSessionController {
       returnedDepositRows.forEach((row) => { if (methods.includes(row._id)) centralBreakdown[row._id] -= Number(row.amount || 0) })
       legacyReturnedDepositRows.forEach((row) => { if (methods.includes(row._id)) centralBreakdown[row._id] -= Number(row.amount || 0) })
       approvedTransfers.forEach((transfer) => {
-        if (!transfer.sourceSession) centralBreakdown.cash += Number(transfer.expectedAmount || 0)
+        const transferAmount = Number(transfer.receivedAmount ?? transfer.expectedAmount ?? 0)
+        const breakdownAmount = totalBreakdown(transfer.breakdown)
+        if (!transfer.sourceSession || breakdownAmount <= 0) centralBreakdown.cash += transferAmount
         else methods.forEach((method) => { centralBreakdown[method] += Number(transfer.breakdown?.[method] || 0) })
       })
       const cashierBalances = (await Promise.all(openSessions.map(async (session) => ({ sessionId: session.id, cashier: session.cashier, ...(await openSessionBalance(session)) })))).filter((item) => item.balance > 0)

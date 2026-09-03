@@ -67,11 +67,15 @@ class PaymentController {
       if (from || to) filter.createdAt = { ...(from ? { $gte: new Date(`${from}T00:00:00`) } : {}), ...(to ? { $lte: new Date(`${to}T23:59:59.999`) } : {}) }
       const periodInstallments = period ? await ContractInstallment.find({ periodKey: period }).select('_id student amount paidAmount dueDate').lean() : []
       if (period) filter['allocations.installment'] = { $in: periodInstallments.map((item) => item._id) }
-      let payments = await Payment.find(filter).populate(paymentPopulate).sort({ createdAt: -1 })
-      const depositStudents = await Student.find({ 'depositPayments.0': { $exists: true } })
-        .select('fullName phone photo depositPayments')
-        .populate('depositPayments.receivedBy', 'firstname lastname role')
-        .lean()
+      const [paymentRows, depositStudents, reportInstallments] = await Promise.all([
+        Payment.find(filter).populate(paymentPopulate).sort({ createdAt: -1 }),
+        Student.find({ 'depositPayments.0': { $exists: true } })
+          .select('fullName phone photo depositPayments')
+          .populate('depositPayments.receivedBy', 'firstname lastname role')
+          .lean(),
+        period ? Promise.resolve(periodInstallments) : ContractInstallment.find({}).select('student amount paidAmount periodKey dueDate').lean(),
+      ])
+      let payments = paymentRows
       const depositPayments = depositStudents.flatMap((student) => (student.depositPayments || []).map((deposit) => ({
         id: deposit._id.toString(),
         paymentGroup: deposit.paymentGroup?.toString() || null,
@@ -99,11 +103,11 @@ class PaymentController {
         return methodMatch && dateMatch && periodMatch && searchMatch
       })
       payments = [...payments, ...filteredDeposits].sort((first, second) => new Date(second.createdAt) - new Date(first.createdAt))
-      const reportInstallments = period ? periodInstallments : await ContractInstallment.find({}).select('student amount paidAmount periodKey dueDate').lean()
+      const activePayments = payments.filter((payment) => !payment.cancelledAt && payment.status !== 'cancelled')
       const billed = reportInstallments.reduce((sum, item) => sum + item.amount, 0)
-      const paid = reportInstallments.reduce((sum, item) => sum + item.paidAmount, 0)
+      const paid = activePayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
       const allStudents = new Set(reportInstallments.map((item) => item.student.toString()))
-      const paidStudents = new Set(reportInstallments.filter((item) => item.paidAmount > 0).map((item) => item.student.toString()))
+      const paidStudents = new Set(activePayments.map((payment) => payment.student?.id || payment.student?._id?.toString?.() || payment.student?.toString?.()).filter(Boolean))
       const now = new Date(); const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
       const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
       const isFuturePeriod = Boolean(period && period > currentKey)
@@ -111,7 +115,7 @@ class PaymentController {
       const waitingInstallments = reportInstallments.filter((item) => new Date(item.dueDate) > todayEnd)
       const debt = dueInstallments.reduce((sum, item) => sum + Math.max(0, item.amount - item.paidAmount), 0)
       const dueStudentIds = new Set(dueInstallments.map((item) => item.student.toString()))
-      const duePaidStudentIds = new Set(dueInstallments.filter((item) => item.paidAmount > 0).map((item) => item.student.toString()))
+      const duePaidStudentIds = new Set([...dueInstallments.filter((item) => item.paidAmount > 0).map((item) => item.student.toString()), ...paidStudents])
       const waitingStudentIds = new Set(waitingInstallments.filter((item) => item.paidAmount < item.amount).map((item) => item.student.toString()))
       const paymentCount = new Set(payments.map((payment) => `${payment.kind || 'contract'}:${payment.paymentGroup?.toString() || payment.id}`)).size
       return ApiResponse.ok(res, { payments, summary: { billed, paid, debt, paidStudents: paidStudents.size, unpaidStudents: Math.max(0, dueStudentIds.size - duePaidStudentIds.size), waitingStudents: waitingStudentIds.size, studentCount: allStudents.size, count: paymentCount, period, isFuturePeriod } })

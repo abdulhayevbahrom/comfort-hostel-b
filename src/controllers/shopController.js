@@ -6,6 +6,7 @@ import { dateKeyInTimeZone } from '../utils/faceTime.js'
 import { calculateShopBalance, shopPeriodRange } from '../utils/shopFinance.js'
 
 const paymentTypes = ['cash', 'card', 'click', 'bank']
+const incomeSources = ['sales', 'director']
 const periodPattern = /^\d{4}-(0[1-9]|1[0-2])$/
 
 class ShopController {
@@ -41,6 +42,7 @@ class ShopController {
       const filter = {}
       if (['income', 'expense'].includes(req.query.type)) filter.type = req.query.type
       if (req.query.category) filter.category = String(req.query.category)
+      if (incomeSources.includes(req.query.incomeSource)) filter.incomeSource = req.query.incomeSource
       const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200))
       const transactions = await ShopTransaction.find(filter)
         .populate('createdBy', 'firstname lastname position')
@@ -55,11 +57,16 @@ class ShopController {
     const type = ['income', 'expense'].includes(body.type) ? body.type : existingType
     const amount = Number(body.amount)
     const occurredAt = body.occurredAt ? new Date(body.occurredAt) : new Date()
+    const paymentParts = ['income', 'expense'].includes(type) && body.paymentParts && typeof body.paymentParts === 'object'
+      ? paymentTypes.map((paymentType) => ({ paymentType, amount: Number(body.paymentParts[paymentType] || 0) })).filter((part) => part.amount > 0)
+      : []
     return {
       type,
       title: String(body.title || '').trim() || (type === 'income' ? 'Do‘kon kirimi' : ''),
+      incomeSource: type === 'income' && incomeSources.includes(body.incomeSource) ? body.incomeSource : 'sales',
       amount,
       paymentType: paymentTypes.includes(body.paymentType) ? body.paymentType : 'cash',
+      paymentParts,
       category: type === 'expense' ? String(body.category || '').trim() : '',
       occurredAt,
       note: String(body.note || '').trim(),
@@ -70,6 +77,12 @@ class ShopController {
     if (!payload.type) { ApiResponse.badRequest(res, 'Kirim yoki chiqim turini tanlang'); return false }
     if (!Number.isFinite(payload.amount) || payload.amount < 1) { ApiResponse.badRequest(res, 'Summani to‘g‘ri kiriting'); return false }
     if (Number.isNaN(payload.occurredAt.getTime())) { ApiResponse.badRequest(res, 'Sana noto‘g‘ri'); return false }
+    if (payload.paymentParts.length) {
+      const invalidPart = payload.paymentParts.some((part) => !paymentTypes.includes(part.paymentType) || !Number.isFinite(part.amount) || part.amount < 1)
+      if (invalidPart) { ApiResponse.badRequest(res, 'To‘lov usullari summasini to‘g‘ri kiriting'); return false }
+      const paidTotal = payload.paymentParts.reduce((sum, part) => sum + part.amount, 0)
+      if (paidTotal !== payload.amount) { ApiResponse.badRequest(res, 'To‘lov usullari yig‘indisi umumiy summaga teng bo‘lishi kerak'); return false }
+    }
     if (payload.type === 'expense' && !payload.title) { ApiResponse.badRequest(res, 'Xarajat nomini kiriting'); return false }
     if (payload.type === 'expense' && !payload.category) { ApiResponse.badRequest(res, 'Xarajat kategoriyasini kiriting'); return false }
     return true
@@ -79,7 +92,21 @@ class ShopController {
     try {
       const payload = this.payload(req.body)
       if (!this.validate(res, payload)) return undefined
-      const transaction = await ShopTransaction.create({ ...payload, createdBy: req.employee._id })
+      if (payload.paymentParts.length) {
+        const paymentGroup = new mongoose.Types.ObjectId()
+        const transactions = await ShopTransaction.insertMany(payload.paymentParts.map((part) => ({
+          ...payload,
+          paymentGroup,
+          amount: part.amount,
+          paymentType: part.paymentType,
+          paymentParts: undefined,
+          createdBy: req.employee._id,
+        })))
+        await ShopTransaction.populate(transactions, { path: 'createdBy', select: 'firstname lastname position' })
+        this.emitChange(req, 'created', transactions[0])
+        return ApiResponse.created(res, { transactions, transaction: transactions[0] }, payload.type === 'income' ? 'Do‘kon kirimi saqlandi' : 'Do‘kon chiqimi saqlandi')
+      }
+      const transaction = await ShopTransaction.create({ ...payload, paymentParts: undefined, createdBy: req.employee._id })
       await transaction.populate('createdBy', 'firstname lastname position')
       this.emitChange(req, 'created', transaction)
       return ApiResponse.created(res, { transaction }, payload.type === 'income' ? 'Do‘kon kirimi saqlandi' : 'Do‘kon chiqimi saqlandi')

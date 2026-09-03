@@ -4,11 +4,12 @@ import { EmployeeAttendance } from '../models/EmployeeAttendance.js'
 import { EmployeePenaltyWaiver } from '../models/EmployeePenaltyWaiver.js'
 import { dateKeyInTimeZone, minutesFromTime, minutesInTimeZone, shiftCrossesMidnight, shiftDurationMinutes } from '../utils/faceTime.js'
 import { calculateEmployeePayroll } from '../utils/employeePayroll.js'
-import { getEmployeeAttendanceSettings, reconcileScheduledEmployeeExits } from '../utils/employeeSchedule.js'
+import { employeeSchedule, getEmployeeAttendanceSettings, reconcileScheduledEmployeeExits } from '../utils/employeeSchedule.js'
 import { ApiResponse } from '../utils/response.js'
 
 const validDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))
 const isWorkDay = (schedule, date) => {
+  if (Array.isArray(schedule.offDates) && schedule.offDates.includes(date)) return false
   const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay()
   return (schedule.workDays || [1, 2, 3, 4, 5, 6]).includes(weekday)
 }
@@ -36,7 +37,8 @@ class EmployeeAttendanceController {
       const byEmployee = new Map(records.map((record) => [record.employee.toString(), record]))
       const rows = employees.map((employee) => {
         const attendance = byEmployee.get(employee.id) || null
-        return { employee, attendance, ...metrics(attendanceSettings.schedule, attendance, date) }
+        const schedule = employeeSchedule(employee, attendanceSettings.schedule)
+        return { employee, attendance, schedule, ...metrics(schedule, attendance, date) }
       })
       const summary = {
         total: rows.length,
@@ -64,10 +66,11 @@ class EmployeeAttendanceController {
         .sort({ createdAt: -1 })
       const waiverByDate = new Map(waivers.map((waiver) => [waiver.date, waiver]))
       const [year, monthNumber] = month.split('-').map(Number)
-      const payroll = calculateEmployeePayroll(employee, records, year, monthNumber, new Date(), { schedule: attendanceSettings.schedule, waivedDates: new Set(waiverByDate.keys()) })
+      const schedule = employeeSchedule(employee, attendanceSettings.schedule)
+      const payroll = calculateEmployeePayroll(employee, records, year, monthNumber, new Date(), { schedule, waivedDates: new Set(waiverByDate.keys()) })
       const penaltyRate = Number(payroll.deductions.penaltyRate || 0)
       const rows = records.map((attendance) => {
-        const row = metrics(attendanceSettings.schedule, attendance, attendance.date)
+        const row = metrics(schedule, attendance, attendance.date)
         const waiver = waiverByDate.get(attendance.date) || null
         return {
           date: attendance.date,
@@ -85,11 +88,11 @@ class EmployeeAttendanceController {
       for (const date of payroll.absentDates) {
         if (records.some((attendance) => attendance.date === date)) continue
         const waiver = waiverByDate.get(date) || null
-        const originalAbsencePenalty = Number(payroll.deductions.minuteRate || 0) * shiftDurationMinutes(attendanceSettings.schedule)
+        const originalAbsencePenalty = Number(payroll.deductions.minuteRate || 0) * shiftDurationMinutes(schedule)
         rows.push({
           date,
           attendance: null,
-          ...metrics(attendanceSettings.schedule, null, date),
+          ...metrics(schedule, null, date),
           penaltyWaived: Boolean(waiver),
           penaltyWaiver: waiver,
           latePenalty: 0,
@@ -120,7 +123,7 @@ class EmployeeAttendanceController {
           waivedAmount: waivers.reduce((sum, waiver) => sum + Number(waiver.totalAmount || 0), 0),
         },
         waivers,
-        schedule: attendanceSettings.schedule,
+        schedule,
         hasOutDevice: exitState.hasOutDevice,
       })
     } catch (error) { return next(error) }
@@ -140,13 +143,14 @@ class EmployeeAttendanceController {
       await reconcileScheduledEmployeeExits(attendanceSettings.schedule)
       const attendance = await EmployeeAttendance.findOne({ employee: employee._id, date })
       const [year, month] = date.slice(0, 7).split('-').map(Number)
-      const payroll = calculateEmployeePayroll(employee, attendance ? [attendance] : [], year, month, new Date(), { schedule: attendanceSettings.schedule })
-      const row = metrics(attendanceSettings.schedule, attendance, date)
+      const schedule = employeeSchedule(employee, attendanceSettings.schedule)
+      const payroll = calculateEmployeePayroll(employee, attendance ? [attendance] : [], year, month, new Date(), { schedule })
+      const row = metrics(schedule, attendance, date)
       const penaltyRate = Number(payroll.deductions.penaltyRate || 0)
       const latePenalty = row.lateMinutes * penaltyRate
       const earlyLeavePenalty = row.earlyLeaveMinutes * penaltyRate
       const absencePenalty = !attendance && payroll.absentDates.includes(date)
-        ? Number(payroll.deductions.minuteRate || 0) * shiftDurationMinutes(attendanceSettings.schedule)
+        ? Number(payroll.deductions.minuteRate || 0) * shiftDurationMinutes(schedule)
         : 0
       const totalAmount = latePenalty + earlyLeavePenalty + absencePenalty
       if (totalAmount <= 0) return ApiResponse.badRequest(res, 'Bu kunda bekor qilinadigan jarima yo‘q')

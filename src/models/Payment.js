@@ -33,6 +33,9 @@ const paymentSchema = new mongoose.Schema({
 }, { timestamps: true })
 
 paymentSchema.index({ createdAt: -1 })
+paymentSchema.index({ student: 1, createdAt: -1 })
+paymentSchema.index({ method: 1, createdAt: -1 })
+paymentSchema.index({ cashSession: 1, createdAt: -1 })
 
 paymentSchema.set('toJSON', { transform(_document, result) { result.id = result._id.toString(); delete result._id; delete result.__v } })
 

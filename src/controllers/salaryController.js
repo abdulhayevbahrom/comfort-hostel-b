@@ -6,8 +6,8 @@ import { EmployeePenaltyWaiver } from '../models/EmployeePenaltyWaiver.js'
 import { SalaryPayment } from '../models/SalaryPayment.js'
 import { ApiResponse } from '../utils/response.js'
 import { calculateEmployeePayroll } from '../utils/employeePayroll.js'
-import { dateKeyInTimeZone } from '../utils/faceTime.js'
-import { getEmployeeAttendanceSettings, reconcileScheduledEmployeeExits } from '../utils/employeeSchedule.js'
+import { dateKeyInTimeZone, shiftDurationMinutes } from '../utils/faceTime.js'
+import { employeeSchedule, getEmployeeAttendanceSettings, reconcileScheduledEmployeeExits } from '../utils/employeeSchedule.js'
 
 const periodPattern = /^\d{4}-(0[1-9]|1[0-2])$/
 const monthIndex = (period) => {
@@ -67,7 +67,7 @@ class SalaryController {
           const payrollPeriod = periodFromIndex(index)
           const [payrollYear, payrollMonth] = periodParts(payrollPeriod)
           const monthly = calculateEmployeePayroll(employee, attendanceByEmployeePeriod.get(`${employee.id}:${payrollPeriod}`) || [], payrollYear, payrollMonth, new Date(), {
-            schedule: attendanceSettings.schedule,
+            schedule: employeeSchedule(employee, attendanceSettings.schedule),
             waivedDates: waivedDatesByEmployeePeriod.get(`${employee.id}:${payrollPeriod}`) || new Set(),
           })
           const monthlyBonus = employeeBonuses.filter((item) => item.period === payrollPeriod).reduce((sum, item) => sum + item.amount, 0)
@@ -77,10 +77,17 @@ class SalaryController {
         const [year, month] = periodParts(period)
         const payroll = selectedIndex >= startIndex
           ? calculateEmployeePayroll(employee, attendanceByEmployeePeriod.get(`${employee.id}:${period}`) || [], year, month, new Date(), {
-            schedule: attendanceSettings.schedule,
+            schedule: employeeSchedule(employee, attendanceSettings.schedule),
             waivedDates: waivedDatesByEmployeePeriod.get(`${employee.id}:${period}`) || new Set(),
           })
           : { baseSalary: 0, netSalary: 0, presentDays: 0, absentDays: 0, totalLateMinutes: 0, totalEarlyLeaveMinutes: 0, deductions: { totalDeduction: 0 } }
+        const schedule = employeeSchedule(employee, attendanceSettings.schedule)
+        const waivedDates = waivedDatesByEmployeePeriod.get(`${employee.id}:${period}`) || new Set()
+        const penaltyRows = [
+          ...(payroll.lateDates || []).map((item) => ({ date: item.date, type: 'late', label: 'Kechikish', detail: `${item.minutes} daq.`, amount: item.waived ? 0 : item.minutes * Number(payroll.deductions?.penaltyRate || 0), waived: item.waived })),
+          ...(payroll.earlyLeaveDates || []).map((item) => ({ date: item.date, type: 'early_leave', label: 'Erta ketish', detail: `${item.minutes} daq.`, amount: item.waived ? 0 : item.minutes * Number(payroll.deductions?.penaltyRate || 0), waived: item.waived })),
+          ...(payroll.absentDates || []).map((date) => ({ date, type: 'absent', label: 'Kelmagan kun', detail: '1 kun', amount: waivedDates.has(date) ? 0 : Number(payroll.deductions?.minuteRate || 0) * shiftDurationMinutes(schedule), waived: waivedDates.has(date) })),
+        ].sort((left, right) => left.date.localeCompare(right.date))
         const currentBonuses = employeeBonuses.filter((item) => item.period === period)
         const bonusAmount = currentBonuses.reduce((sum, item) => sum + item.amount, 0)
         const salaryForPeriod = payroll.netSalary + bonusAmount
@@ -90,6 +97,7 @@ class SalaryController {
           salary: salaryForPeriod,
           baseSalary: payroll.baseSalary,
           payroll,
+          penaltyRows,
           bonusAmount,
           bonuses: currentBonuses,
           previousBalance,

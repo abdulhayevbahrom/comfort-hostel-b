@@ -1,16 +1,21 @@
 import mongoose from 'mongoose'
 
 const normalizeWorkDays = (value) => {
-  if (!Array.isArray(value)) return [1, 2, 3, 4, 5, 6]
+  if (!Array.isArray(value)) return [0, 1, 2, 3, 4, 5, 6]
   return [...new Set(value.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))].sort((a, b) => a - b)
 }
 
 const workScheduleSchema = new mongoose.Schema({
   checkInTime: { type: String, match: /^([01]\d|2[0-3]):[0-5]\d$/, default: '09:00' },
   checkOutTime: { type: String, match: /^([01]\d|2[0-3]):[0-5]\d$/, default: '18:00' },
+  offDates: {
+    type: [String],
+    default: [],
+    set: (value) => Array.isArray(value) ? [...new Set(value.filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(String(date))))].sort() : [],
+  },
   workDays: {
     type: [Number],
-    default: [1, 2, 3, 4, 5, 6],
+    default: [0, 1, 2, 3, 4, 5, 6],
     set: normalizeWorkDays,
     validate: { validator: (days) => days.length > 0, message: 'Kamida bitta ish kuni tanlanishi kerak' },
   },

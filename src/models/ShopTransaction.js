@@ -1,8 +1,10 @@
 import mongoose from 'mongoose'
 
 const shopTransactionSchema = new mongoose.Schema({
+  paymentGroup: { type: mongoose.Schema.Types.ObjectId, default: null, index: true },
   type: { type: String, enum: ['income', 'expense'], required: true, index: true },
   title: { type: String, trim: true, maxlength: 180, default: '' },
+  incomeSource: { type: String, enum: ['sales', 'director'], default: 'sales', index: true },
   amount: { type: Number, required: true, min: 1 },
   paymentType: { type: String, enum: ['cash', 'card', 'click', 'bank'], required: true, default: 'cash', index: true },
   category: { type: String, trim: true, maxlength: 100, default: '', index: true },

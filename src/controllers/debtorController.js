@@ -28,22 +28,34 @@ class DebtorController {
         .populate({ path: 'contract', select: 'contractNumber status room startDate endDate paymentType', populate: { path: 'room', select: 'roomNumber block floor' } })
         .sort({ dueDate: 1 })
       const installments = allInstallments.filter((item) => item.paidAmount < item.amount)
+      const studentIds = [...new Set(installments.map((item) => item.student?._id?.toString()).filter(Boolean))]
+      const objectStudentIds = studentIds.map((id) => new mongoose.Types.ObjectId(id))
+      const depositStudentsPromise = !isFuturePeriod && requestedPeriod === currentKey
+        ? Student.find({ depositReturnedAt: null, depositType: { $in: ['none', 'money'] } })
+          .select('fullName phone fatherPhone motherPhone photo university faculty course depositType depositAmount depositReceivedAt depositPayments')
+          .populate('university', 'name').populate('faculty', 'name')
+        : Promise.resolve([])
 
-      const deadlines = await DebtorDeadline.find({ periodKey: requestedPeriod, student: { $in: installments.map((item) => item.student?._id).filter(Boolean) } }).populate('setBy', 'firstname lastname role')
+      const [deadlines, smsRows, paymentRows, depositStudents] = await Promise.all([
+        DebtorDeadline.find({ periodKey: requestedPeriod, student: { $in: objectStudentIds } }).populate('setBy', 'firstname lastname role').lean(),
+        DebtorSms.aggregate([
+          { $match: { periodKey: requestedPeriod } },
+          { $group: { _id: '$student', count: { $sum: 1 }, lastSentAt: { $max: '$createdAt' } } },
+        ]),
+        objectStudentIds.length
+          ? Payment.find({ student: { $in: objectStudentIds } })
+            .select('student contract amount method note allocations createdAt')
+            .populate('contract', 'contractNumber')
+            .populate('allocations.installment', 'periodKey')
+            .sort({ createdAt: -1 })
+            .lean({ virtuals: true })
+          : Promise.resolve([]),
+        depositStudentsPromise,
+      ])
       const deadlinesByStudent = new Map(deadlines.map((item) => [item.student.toString(), item]))
 
-      const smsRows = await DebtorSms.aggregate([
-        { $match: { periodKey: requestedPeriod } },
-        { $group: { _id: '$student', count: { $sum: 1 }, lastSentAt: { $max: '$createdAt' } } },
-      ])
       const smsByStudent = new Map(smsRows.map((item) => [item._id.toString(), { count: item.count, lastSentAt: item.lastSentAt }]))
 
-      const studentIds = [...new Set(installments.map((item) => item.student?._id?.toString()).filter(Boolean))]
-      const paymentRows = await Payment.find({ student: { $in: studentIds.map((id) => new mongoose.Types.ObjectId(id)) } })
-        .select('student contract amount method note allocations createdAt')
-        .populate('contract', 'contractNumber')
-        .populate('allocations.installment', 'periodKey')
-        .sort({ createdAt: -1 })
       const paymentsByStudent = new Map()
       paymentRows.forEach((payment) => { const key = payment.student.toString(); if (!paymentsByStudent.has(key)) paymentsByStudent.set(key, []); paymentsByStudent.get(key).push(payment) })
       const grouped = new Map()
@@ -73,9 +85,6 @@ class DebtorController {
       let depositPaidAmount = 0
       const depositPaidByStudent = new Map()
       if (!isFuturePeriod && requestedPeriod === currentKey) {
-        const depositStudents = await Student.find({ depositReturnedAt: null, depositType: { $in: ['none', 'money'] } })
-          .select('fullName phone fatherPhone motherPhone photo university faculty course depositType depositAmount depositReceivedAt depositPayments')
-          .populate('university', 'name').populate('faculty', 'name')
         for (const student of depositStudents) {
           const required = student.depositType === 'none' ? 700000 : Number(student.depositAmount || 700000)
           const paid = student.depositPayments?.length ? student.depositPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) : student.depositType === 'money' && student.depositReceivedAt ? Number(student.depositAmount || 0) : 0

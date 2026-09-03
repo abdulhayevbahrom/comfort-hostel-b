@@ -9,6 +9,7 @@
     "reset:seed": "node src/scripts/resetAndSeed.js",
     "audit:dashboard": "node src/scripts/auditDashboardBalance.js",
     "repair:deposit-cash-session": "node src/scripts/attachDepositToCashSession.js",
+    "repair:cash-accounting": "node src/scripts/repairCashSessionAccounting.js",
     "test": "node --test"
   },
   "dependencies": {

@@ -1,10 +1,11 @@
 import { dateKeyInTimeZone, minutesFromTime, minutesInTimeZone, shiftCrossesMidnight, shiftDurationMinutes } from './faceTime.js'
 
 const round = (number) => Math.round((number + Number.EPSILON) * 100) / 100
-const workingDates = (year, month, days) => {
+const workingDates = (year, month, days, offDates = new Set()) => {
   const result = []; const count = new Date(year, month, 0).getDate()
   for (let day = 1; day <= count; day += 1) {
-    if (days.has(new Date(Date.UTC(year, month - 1, day)).getUTCDay())) result.push(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`)
+    const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+    if (days.has(new Date(Date.UTC(year, month - 1, day)).getUTCDay()) && !offDates.has(date)) result.push(date)
   }
   return result
 }
@@ -13,7 +14,7 @@ export function calculateEmployeePayroll(employee, attendances, year, month, asO
   const schedule = options.schedule || employee.workSchedule || {}
   const waivedDates = options.waivedDates instanceof Set ? options.waivedDates : new Set(options.waivedDates || [])
   const salary = Number(employee.salary || 0)
-  const allWorkingDates = workingDates(year, month, new Set(Array.isArray(schedule.workDays) ? schedule.workDays : [1, 2, 3, 4, 5, 6]))
+  const allWorkingDates = workingDates(year, month, new Set(Array.isArray(schedule.workDays) ? schedule.workDays : [1, 2, 3, 4, 5, 6]), new Set(Array.isArray(schedule.offDates) ? schedule.offDates : []))
   const asOfKey = dateKeyInTimeZone(asOfDate)
   const period = `${year}-${String(month).padStart(2, '0')}`
   const attendanceDates = new Set(attendances.map((item) => item.date))

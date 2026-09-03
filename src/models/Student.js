@@ -69,6 +69,8 @@ studentSchema.pre('validate', function ensureFaceIdCode() {
 })
 
 studentSchema.index({ jshr: 1 }, { unique: true, partialFilterExpression: { jshr: { $type: 'string' } } })
+studentSchema.index({ 'depositPayments.paidAt': -1 })
+studentSchema.index({ depositReturnedAt: 1, depositType: 1 })
 studentSchema.index(
   { passportSeries: 1, passportNumber: 1 },
   { unique: true, partialFilterExpression: { passportSeries: { $type: 'string' }, passportNumber: { $type: 'string' } } },

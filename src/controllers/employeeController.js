@@ -3,6 +3,7 @@ import { Employee } from '../models/Employee.js'
 import { Room } from '../models/Room.js'
 import { hashPassword, validatePassword } from '../utils/bcrypt.js'
 import { faceIdCodeExists, isValidFaceIdCode, normalizeFaceIdCode } from '../utils/faceIdCode.js'
+import { normalizeEmployeeSchedule } from '../utils/employeeSchedule.js'
 import { ApiResponse } from '../utils/response.js'
 
 class EmployeeController {
@@ -23,6 +24,7 @@ class EmployeeController {
         ? [...new Set(body.assignedRooms.filter((id) => mongoose.isValidObjectId(id)))]
         : [],
       businessUnit: body.businessUnit === 'shop' ? 'shop' : 'hostel',
+      workSchedule: normalizeEmployeeSchedule({ ...(body.workSchedule || {}), workDays: [0, 1, 2, 3, 4, 5, 6] }),
     }
 
     if (payload.canLogin) {
