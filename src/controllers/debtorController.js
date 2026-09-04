@@ -3,11 +3,10 @@ import { ContractInstallment } from '../models/ContractInstallment.js'
 import { Payment } from '../models/Payment.js'
 import { DebtorDeadline } from '../models/DebtorDeadline.js'
 import { DebtorSms } from '../models/DebtorSms.js'
-import { GeneralSetting } from '../models/GeneralSetting.js'
 import { Student } from '../models/Student.js'
 import { StudentContract } from '../models/StudentContract.js'
 import { ApiResponse } from '../utils/response.js'
-import { renderDebtorSms, sendTextUpSms } from '../utils/textup.js'
+import { renderStaticDebtorSms, sendTextUpSms } from '../utils/textup.js'
 
 const uzbekMonths = ['Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun', 'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr']
 
@@ -170,8 +169,7 @@ class DebtorController {
       })
       if (sentCount >= 3) return ApiResponse.badRequest(res, 'Bu talabaga ushbu oy uchun SMS 3 marta yuborilgan')
       const debtAmount = installments.reduce((sum, item) => sum + Math.max(0, item.amount - item.paidAmount), 0) + depositDebt
-      const settings = await GeneralSetting.findOneAndUpdate({ key: 'general' }, { $setOnInsert: { key: 'general' } }, { new: true, upsert: true, setDefaultsOnInsert: true })
-      const content = renderDebtorSms(settings.debtorSmsTemplate, { studentName: student.fullName, debtAmount: Number(debtAmount).toLocaleString('uz-UZ'), period: formatSmsPeriod(periodKey), hostelName: settings.hostelName })
+      const content = renderStaticDebtorSms({ studentName: student.fullName, debtAmount, period: formatSmsPeriod(periodKey) })
       if (!content.trim()) return ApiResponse.badRequest(res, 'SMS matni sozlamalarda kiritilmagan')
       const destination = await sendTextUpSms({ destination: student.phone, content })
       const sms = await DebtorSms.create({ student: student._id, periodKey, destination, content, sentBy: req.employee._id, source: 'manual' })

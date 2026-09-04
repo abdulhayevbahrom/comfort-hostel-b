@@ -3,8 +3,6 @@ import { ApiResponse } from '../utils/response.js'
 import { uploadImages } from '../utils/imgbb.js'
 import { normalizeEmployeeSchedule } from '../utils/employeeSchedule.js'
 
-const defaultDebtorSmsTemplate = "Hurmatli {studentName} sizda {period} uchun {debtAmount} so'm qarzdorlik mavjud. Qarzdorlikni to'lamasangiz binoga kirish taqiqlanadi. {hostelName}!"
-
 class GeneralSettingController {
   get = async (_req, res, next) => {
     try {
@@ -30,7 +28,6 @@ class GeneralSettingController {
           organizationPhone: String(req.body.organizationPhone || '').replace(/\D/g, '').replace(/^998(?=\d{9}$)/, ''),
           organizationAddress: String(req.body.organizationAddress || '').trim(),
           receiptThankYou: String(req.body.receiptThankYou || '').trim(),
-          debtorSmsTemplate: String(req.body.debtorSmsTemplate || '').trim() || current?.debtorSmsTemplate || defaultDebtorSmsTemplate,
           employeeFaceAttendanceEnabled: req.body.employeeFaceAttendanceEnabled !== false,
           employeeWorkSchedule: normalizeEmployeeSchedule(req.body.employeeWorkSchedule || current?.employeeWorkSchedule || {}),
           logo,

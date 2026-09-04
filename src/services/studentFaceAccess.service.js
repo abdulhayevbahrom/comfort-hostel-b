@@ -3,11 +3,10 @@ import { ContractInstallment } from '../models/ContractInstallment.js'
 import { DebtorSms } from '../models/DebtorSms.js'
 import { FaceAccessEvent } from '../models/FaceAccessEvent.js'
 import { FaceAccessState } from '../models/FaceAccessState.js'
-import { GeneralSetting } from '../models/GeneralSetting.js'
 import { Student } from '../models/Student.js'
 import { StudentContract } from '../models/StudentContract.js'
 import { accessDecision, FACE_WARNING_LIMIT, localDateKey, shouldQueueDebtSms } from '../utils/faceAccess.js'
-import { renderDebtorSms, sendTextUpSms } from '../utils/textup.js'
+import { renderStaticDebtorSms, sendTextUpSms } from '../utils/textup.js'
 
 const DUPLICATE_SCAN_MS = Math.max(5, Number(process.env.FACEID_RESCAN_SECONDS || 300)) * 1000
 const SMS_MAX_ATTEMPTS = Math.max(1, Number(process.env.FACEID_SMS_MAX_ATTEMPTS || 8))
@@ -266,13 +265,11 @@ async function evaluateKnownStudent(student, values, { io } = {}) {
     return resultFromEvent(event)
   }
 
-  const settings = await GeneralSetting.findOneAndUpdate({ key: 'general' }, { $setOnInsert: { key: 'general' } }, { new: true, upsert: true, setDefaultsOnInsert: true })
   const periodKey = installments[0]?.periodKey || localDateKey(occurredAt).slice(0, 7)
-  const content = renderDebtorSms(settings.debtorSmsTemplate, {
+  const content = renderStaticDebtorSms({
     studentName: student.fullName,
-    debtAmount: Number(debtAmount).toLocaleString('uz-UZ'),
+    debtAmount,
     period: formatSmsPeriod(periodKey),
-    hostelName: settings.hostelName,
   })
   state.warningCount = Math.min(FACE_WARNING_LIMIT, state.warningCount + 1)
   state.lastWarningAt = occurredAt

@@ -8,6 +8,22 @@ let sessionPromise = null
 let cachedTemplateId = null
 const textUpTimeout = () => AbortSignal.timeout(Math.max(1000, Number(process.env.TEXTUP_TIMEOUT_MS || 8000)))
 
+export function formatDebtorSmsStudentName(fullName) {
+  return String(fullName || '').trim().split(/\s+/).slice(0, 2).join(' ')
+}
+
+export function formatDebtorSmsDebtAmount(amount) {
+  return Math.max(0, Math.round(Number(amount) || 0)).toLocaleString('uz-UZ')
+}
+
+export function renderStaticDebtorSms({ studentName, debtAmount, period }) {
+  return renderDebtorSms("Hurmatli {studentName} sizda {period} uchun {debtAmount} so'm qarzdorlik mavjud. Qarzdorlikni to'lamasangiz binoga kirish taqiqlanadi. Comfort hostel!", {
+    studentName: formatDebtorSmsStudentName(studentName),
+    debtAmount: formatDebtorSmsDebtAmount(debtAmount),
+    period,
+  })
+}
+
 const tokenExpiry = (token) => {
   try {
     const payload = JSON.parse(Buffer.from(String(token).split('.')[1], 'base64url').toString('utf8'))
