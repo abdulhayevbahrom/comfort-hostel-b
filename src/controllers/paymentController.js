@@ -265,7 +265,7 @@ class PaymentController {
             )
           }
           const paymentGroup = new mongoose.Types.ObjectId()
-          payments = await Payment.create(paymentParts.map((part) => ({ student: contract.student, contract: contract._id, paymentGroup, amount: part.amount, method: part.method, fundHolder, payerType, note, receivedBy: req.employee._id, cashSession: cashSession?._id || null, allocations: [{ installment: installment._id, amount: part.amount }], createdAt: part.paidAt, updatedAt: part.paidAt, auditHistory: [{ action: 'created', performedBy: req.employee._id, after: { amount: part.amount, method: part.method, payerType, note } }] })), { session })
+          payments = await Payment.create(paymentParts.map((part) => ({ student: contract.student, contract: contract._id, paymentGroup, amount: part.amount, method: part.method, fundHolder, payerType, note, receivedBy: req.employee._id, cashSession: cashSession?._id || null, allocations: [{ installment: installment._id, amount: part.amount }], createdAt: part.paidAt, updatedAt: part.paidAt, auditHistory: [{ action: 'created', performedBy: req.employee._id, after: { amount: part.amount, method: part.method, payerType, note } }] })), { session, ordered: true })
         })
       } finally { await session.endSession() }
       await Promise.all(payments.map((payment) => payment.populate(paymentPopulate)))
