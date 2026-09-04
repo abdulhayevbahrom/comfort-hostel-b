@@ -5,6 +5,7 @@ import { DebtorDeadline } from '../models/DebtorDeadline.js'
 import { DebtorSms } from '../models/DebtorSms.js'
 import { GeneralSetting } from '../models/GeneralSetting.js'
 import { Student } from '../models/Student.js'
+import { StudentContract } from '../models/StudentContract.js'
 import { ApiResponse } from '../utils/response.js'
 import { renderDebtorSms, sendTextUpSms } from '../utils/textup.js'
 
@@ -25,7 +26,7 @@ class DebtorController {
       const isFuturePeriod = requestedPeriod > currentKey
       const allInstallments = await ContractInstallment.find({ periodKey: requestedPeriod })
         .populate({ path: 'student', select: 'fullName phone fatherPhone motherPhone photo university faculty course', populate: [{ path: 'university', select: 'name' }, { path: 'faculty', select: 'name' }] })
-        .populate({ path: 'contract', select: 'contractNumber status room startDate endDate paymentType', populate: { path: 'room', select: 'roomNumber block floor' } })
+        .populate({ path: 'contract', select: 'contractNumber status room bedNumber startDate endDate paymentType', populate: { path: 'room', select: 'roomNumber block floor' } })
         .sort({ dueDate: 1 })
       const installments = allInstallments.filter((item) => item.paidAmount < item.amount)
       const studentIds = [...new Set(installments.map((item) => item.student?._id?.toString()).filter(Boolean))]
@@ -85,6 +86,14 @@ class DebtorController {
       let depositPaidAmount = 0
       const depositPaidByStudent = new Map()
       if (!isFuturePeriod && requestedPeriod === currentKey) {
+        const depositStudentIds = depositStudents.map((student) => student._id).filter(Boolean)
+        const depositContracts = depositStudentIds.length
+          ? await StudentContract.find({ student: { $in: depositStudentIds }, status: 'active' })
+            .select('student contractNumber status room bedNumber startDate endDate paymentType')
+            .populate('room', 'roomNumber block floor')
+            .sort({ startDate: -1 })
+          : []
+        const depositContractByStudent = new Map(depositContracts.map((contract) => [contract.student.toString(), contract]))
         for (const student of depositStudents) {
           const required = student.depositType === 'none' ? 700000 : Number(student.depositAmount || 700000)
           const paid = student.depositPayments?.length ? student.depositPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) : student.depositType === 'money' && student.depositReceivedAt ? Number(student.depositAmount || 0) : 0
@@ -94,8 +103,14 @@ class DebtorController {
           const depositDebt = Math.max(0, required - paid)
           if (!depositDebt) continue
           const existing = debtors.find((item) => item.student.id === student.id)
-          if (existing) { existing.depositDebt = depositDebt; existing.totalDebt += depositDebt }
-          else debtors.push({ student, contracts: [], periods: [], periodCount: 0, totalDebt: depositDebt, waitingAmount: 0, overdueDebt: 0, currentDebt: depositDebt, paidTowardsDebt: paid, paymentHistory: [], debtStatus: paid > 0 ? 'partial' : 'unpaid', depositDebt, paymentDeadline: null, isDeadlineReached: false, smsSentCount: 0, lastSmsSentAt: null })
+          const activeContract = depositContractByStudent.get(student.id)
+          if (existing) {
+            existing.depositDebt = depositDebt
+            existing.totalDebt += depositDebt
+            if (activeContract && !existing.contracts.some((contract) => contract.id === activeContract.id)) existing.contracts.push(activeContract)
+          } else {
+            debtors.push({ student, contracts: activeContract ? [activeContract] : [], periods: [], periodCount: 0, totalDebt: depositDebt, waitingAmount: 0, overdueDebt: 0, currentDebt: depositDebt, paidTowardsDebt: paid, paymentHistory: [], debtStatus: paid > 0 ? 'partial' : 'unpaid', depositDebt, paymentDeadline: null, isDeadlineReached: false, smsSentCount: 0, lastSmsSentAt: null })
+          }
         }
         debtors = debtors.sort((a, b) => b.totalDebt - a.totalDebt)
       }
