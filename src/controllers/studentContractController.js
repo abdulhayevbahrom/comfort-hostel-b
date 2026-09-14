@@ -9,6 +9,33 @@ import {
   calculateContractPayment,
 } from "../utils/contractPayment.js";
 
+const money = (value) => Number(value || 0).toLocaleString("uz-UZ");
+const formatAuditDate = (value) => {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
+};
+const normalizeAuditValue = (value) => {
+  if (value === undefined || value === null) return "";
+  if (value instanceof Date) return formatAuditDate(value);
+  if (typeof value === "object" && value._id) return value._id.toString();
+  return String(value);
+};
+const auditChanged = (before, after) => normalizeAuditValue(before) !== normalizeAuditValue(after);
+const contractAuditFields = [
+  ["student", "Talaba"],
+  ["room", "Xona"],
+  ["bedNumber", "Joy raqami"],
+  ["contractNumber", "Shartnoma raqami"],
+  ["startDate", "Boshlanish sanasi", formatAuditDate],
+  ["endDate", "Tugash sanasi", formatAuditDate],
+  ["paymentType", "To‘lov turi"],
+  ["paymentAmount", "To‘lov summasi", (value) => `${money(value)} so‘m`],
+  ["totalAmount", "Shartnoma jami", (value) => `${money(value)} so‘m`],
+  ["status", "Holati"],
+  ["note", "Izoh"],
+];
+
 class StudentContractController {
   cleanPayload(body) {
     const payload = {
@@ -122,6 +149,32 @@ class StudentContractController {
     if (!(await ContractInstallment.exists({ contract: contract._id }))) {
       await ContractInstallment.insertMany(buildContractInstallments(contract));
     }
+  }
+
+  buildContractAuditChanges(existing, payload) {
+    return contractAuditFields
+      .map(([field, label, formatter]) => {
+        if (!auditChanged(existing[field], payload[field])) return null;
+        const format = formatter || normalizeAuditValue;
+        return { field, label, before: format(existing[field]), after: format(payload[field]) };
+      })
+      .filter(Boolean);
+  }
+
+  async appendStudentContractAudit({ studentId, contractId, employeeId, changes, title }) {
+    if (!changes.length) return;
+    await Student.findByIdAndUpdate(studentId, {
+      $push: {
+        auditHistory: {
+          scope: "contract",
+          action: changes.some((change) => change.field === "status" && change.after === "cancelled") ? "cancelled" : "updated",
+          title,
+          performedBy: employeeId,
+          contract: contractId,
+          changes,
+        },
+      },
+    });
   }
 
   async validateRoom(payload, res, excludeContractId = null) {
@@ -343,6 +396,7 @@ class StudentContractController {
         const now = new Date();
         payload.cancelledAt = now;
       } else payload.cancelledAt = existing.cancelledAt;
+      const auditChanges = this.buildContractAuditChanges(existing, payload);
       const contract = await StudentContract.findByIdAndUpdate(
         req.params.id,
         payload,
@@ -352,6 +406,13 @@ class StudentContractController {
         if (paidExists) await this.extendInstallments(contract);
         else await this.syncInstallments(contract);
       }
+      await this.appendStudentContractAudit({
+        studentId: existing.student,
+        contractId: existing._id,
+        employeeId: req.employee._id,
+        changes: auditChanges,
+        title: "Shartnoma ma’lumotlari yangilandi",
+      });
       this.emitChange(req, "updated", contract);
       return ApiResponse.ok(res, { contract }, "Shartnoma yangilandi");
     } catch (error) {

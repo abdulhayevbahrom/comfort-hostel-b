@@ -10,6 +10,59 @@ import { ApiResponse } from '../utils/response.js'
 import { deleteImage, uploadImages } from '../utils/imgbb.js'
 import { deletePrivateImage, privateImagePath, savePrivateImage } from '../utils/privateFileStorage.js'
 
+const money = (value) => Number(value || 0).toLocaleString('uz-UZ')
+const formatAuditDate = (value) => {
+  if (!value) return ''
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10)
+}
+const normalizeAuditValue = (value) => {
+  if (value === undefined || value === null) return ''
+  if (value instanceof Date) return formatAuditDate(value)
+  if (typeof value === 'object' && value._id) return value._id.toString()
+  if (typeof value === 'boolean') return value ? 'Ha' : 'Yo‘q'
+  return String(value)
+}
+const auditChanged = (before, after) => normalizeAuditValue(before) !== normalizeAuditValue(after)
+
+const studentAuditFields = [
+  ['fullName', 'F.I.Sh.'],
+  ['faceIdCode', 'FaceID kodi'],
+  ['phone', 'Telefon'],
+  ['gender', 'Jinsi'],
+  ['fatherPhone', 'Otasi/bobosi telefoni'],
+  ['motherPhone', 'Onasi/buvisi telefoni'],
+  ['depositType', 'Depozit turi'],
+  ['depositAmount', 'Depozit summasi', (value) => value ? `${money(value)} so‘m` : ''],
+  ['depositReceivedAt', 'Depozit olingan sana', formatAuditDate],
+  ['university', 'Universitet'],
+  ['faculty', 'Fakultet'],
+  ['address', 'Manzil'],
+  ['course', 'Kurs'],
+  ['educationType', 'Ta’lim turi'],
+  ['hasTemporaryRegistration', 'Vaqtinchalik propiska'],
+  ['temporaryRegistrationMonths', 'Vaqtinchalik propiska oyi'],
+  ['studentStatus', 'Talaba holati'],
+  ['plannedDepartureDate', 'Ketish sanasi', formatAuditDate],
+  ['hasTaxContract', 'Soliq shartnomasi'],
+  ['taxContractType', 'Soliq shartnomasi turi'],
+  ['disciplinaryStatus', 'Intizomiy holat'],
+  ['disciplinaryNote', 'Intizomiy izoh'],
+  ['disabilityStatus', 'Nogironlik holati'],
+  ['jshr', 'JSHR'],
+  ['passportSeries', 'Pasport seriyasi'],
+  ['passportNumber', 'Pasport raqami'],
+  ['zaksSeries', 'ZAKS seriyasi'],
+  ['zaksNumber', 'ZAKS raqami'],
+]
+
+const imageAuditChange = (field, label, before, after) => {
+  const beforeExists = Boolean(before?.path || before?.url)
+  const afterExists = Boolean(after?.path || after?.url)
+  if (beforeExists === afterExists) return null
+  return { field, label, before: beforeExists ? 'Yuklangan' : '', after: afterExists ? 'Yuklangan' : '' }
+}
+
 class StudentController {
   canReceivePayment = (employee) => ['cashier', 'head_cashier'].includes(employee?.role)
 
@@ -244,6 +297,23 @@ class StudentController {
     req.app.get('io')?.emit('students:changed', { action, studentId: student?.id || student?._id?.toString(), occurredAt: new Date().toISOString() })
   }
 
+  buildStudentAuditChanges(student, payload, oldImages = {}) {
+    const changes = studentAuditFields
+      .map(([field, label, formatter]) => {
+        if (!auditChanged(student[field], payload[field])) return null
+        const format = formatter || normalizeAuditValue
+        return { field, label, before: format(student[field]), after: format(payload[field]) }
+      })
+      .filter(Boolean)
+    const imageChanges = [
+      imageAuditChange('photo', 'Talaba rasmi', oldImages.photo, payload.photo),
+      imageAuditChange('marriageCertificate', 'ZAKS rasmi', oldImages.marriageCertificate, payload.marriageCertificate),
+      imageAuditChange('passportImages.front', 'Pasport old rasmi', oldImages.passportFront, payload.passportImages?.front),
+      imageAuditChange('passportImages.back', 'Pasport orqa rasmi', oldImages.passportBack, payload.passportImages?.back),
+    ].filter(Boolean)
+    return [...changes, ...imageChanges]
+  }
+
   findBlacklist(payload) {
     const identities = []
     if (payload.jshr) identities.push({ jshr: payload.jshr })
@@ -352,7 +422,10 @@ class StudentController {
   getById = async (req, res, next) => {
     try {
       if (!mongoose.isValidObjectId(req.params.id)) return ApiResponse.notFound(res, 'Talaba topilmadi')
-      const student = await Student.findById(req.params.id).populate('university', 'name shortName').populate('faculty', 'name')
+      const student = await Student.findById(req.params.id)
+        .populate('university', 'name shortName')
+        .populate('faculty', 'name')
+        .populate('auditHistory.performedBy', 'firstname lastname role position')
       if (!student) return ApiResponse.notFound(res, 'Talaba topilmadi')
       return ApiResponse.ok(res, { student })
     } catch (error) { return next(error) }
@@ -407,6 +480,7 @@ class StudentController {
       const blocked = await this.findBlacklist(payload)
       if (blocked && blocked.sourceStudent?.toString() !== student.id) return ApiResponse.conflict(res, `Bu shaxs qora ro‘yxatda: ${blocked.reason}`)
       const oldPhoto = student.photo ? student.photo.toJSON?.() || student.photo : null
+      const oldMarriageCertificate = student.marriageCertificate ? student.marriageCertificate.toJSON?.() || student.marriageCertificate : null
       const oldPassportFront = student.passportImages?.front ? student.passportImages.front.toJSON?.() || student.passportImages.front : null
       const oldPassportBack = student.passportImages?.back ? student.passportImages.back.toJSON?.() || student.passportImages.back : null
       const photoFile = req.files?.photo?.[0]
@@ -436,13 +510,28 @@ class StudentController {
         payload.depositPaymentMethod = ''
         payload.depositReceivedAt = null
       }
+      const auditChanges = this.buildStudentAuditChanges(student, payload, {
+        photo: oldPhoto,
+        marriageCertificate: oldMarriageCertificate,
+        passportFront: oldPassportFront,
+        passportBack: oldPassportBack,
+      })
+      if (auditChanges.length) {
+        student.auditHistory.push({
+          scope: 'student',
+          action: 'updated',
+          title: 'Talaba ma’lumotlari yangilandi',
+          performedBy: req.employee._id,
+          changes: auditChanges,
+        })
+      }
       student.set(payload)
       await student.save()
       if ((req.body.removePhoto || uploaded) && oldPhoto?.url) await deleteImage(oldPhoto).catch(() => {})
       if (passportFrontFile || req.body.removePassportFront) await deletePrivateImage(oldPassportFront).catch(() => {})
       if (passportBackFile || req.body.removePassportBack) await deletePrivateImage(oldPassportBack).catch(() => {})
       await this.syncBlacklist(student)
-      await student.populate([{ path: 'university', select: 'name shortName' }, { path: 'faculty', select: 'name' }])
+      await student.populate([{ path: 'university', select: 'name shortName' }, { path: 'faculty', select: 'name' }, { path: 'auditHistory.performedBy', select: 'firstname lastname role position' }])
       this.emitChange(req, 'updated', student)
       return ApiResponse.ok(res, { student }, 'Talaba yangilandi')
     } catch (error) { return next(error) }

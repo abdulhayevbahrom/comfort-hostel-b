@@ -31,6 +31,23 @@ const depositPaymentSchema = new mongoose.Schema({
   auditHistory: { type: [depositAuditSchema], default: [] },
 }, { timestamps: true })
 
+const auditChangeSchema = new mongoose.Schema({
+  field: { type: String, required: true },
+  label: { type: String, required: true },
+  before: { type: mongoose.Schema.Types.Mixed, default: null },
+  after: { type: mongoose.Schema.Types.Mixed, default: null },
+}, { _id: false })
+
+const studentAuditSchema = new mongoose.Schema({
+  scope: { type: String, enum: ['student', 'contract'], required: true, index: true },
+  action: { type: String, enum: ['created', 'updated', 'cancelled'], default: 'updated', index: true },
+  title: { type: String, required: true },
+  performedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', required: true },
+  performedAt: { type: Date, default: Date.now, index: true },
+  contract: { type: mongoose.Schema.Types.ObjectId, ref: 'StudentContract', default: null },
+  changes: { type: [auditChangeSchema], default: [] },
+}, { _id: true })
+
 const studentSchema = new mongoose.Schema(
   {
     faceIdCode: {
@@ -81,6 +98,7 @@ const studentSchema = new mongoose.Schema(
     jshr: { type: String, trim: true, match: /^\d{14}$/ },
     passportSeries: { type: String, trim: true, uppercase: true, match: /^[A-Z]{2}$/ },
     passportNumber: { type: String, trim: true, match: /^\d{7}$/ },
+    auditHistory: { type: [studentAuditSchema], default: [] },
   },
   { timestamps: true },
 )
