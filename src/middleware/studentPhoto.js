@@ -4,13 +4,17 @@ import { ApiResponse } from '../utils/response.js'
 const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp'])
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024, files: 2 },
+  limits: { fileSize: 5 * 1024 * 1024, files: 4 },
   fileFilter: (_req, file, callback) => allowedTypes.has(file.mimetype) ? callback(null, true) : callback(new Error('Rasm faqat JPG, PNG yoki WEBP formatida bo‘lishi mumkin')),
-}).fields([{ name: 'photo', maxCount: 1 }, { name: 'marriageCertificate', maxCount: 1 }])
+}).fields([{ name: 'photo', maxCount: 1 }, { name: 'marriageCertificate', maxCount: 1 }, { name: 'passportFront', maxCount: 1 }, { name: 'passportBack', maxCount: 1 }])
 
 export function uploadStudentPhoto(req, res, next) {
   upload(req, res, (error) => {
-    if (!error) return next()
+    if (!error) {
+      const passportFiles = [...(req.files?.passportFront || []), ...(req.files?.passportBack || [])]
+      if (passportFiles.some((file) => file.size > 2 * 1024 * 1024)) return ApiResponse.badRequest(res, 'Pasport rasmi 2 MB dan oshmasligi kerak')
+      return next()
+    }
     return ApiResponse.badRequest(res, error.code === 'LIMIT_FILE_SIZE' ? 'Yuz rasmi 5 MB dan oshmasligi kerak' : error.message)
   })
 }

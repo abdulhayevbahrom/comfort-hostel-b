@@ -36,6 +36,7 @@ const generalSettingSchema = new mongoose.Schema(
     receiptThankYou: { type: String, trim: true, maxlength: 500, default: 'To‘lovingiz uchun rahmat!' },
     debtorSmsTemplate: { type: String, trim: true, maxlength: 500, default: "Hurmatli {studentName} sizda {period} uchun {debtAmount} so'm qarzdorlik mavjud. Qarzdorlikni to'lamasangiz binoga kirish taqiqlanadi. {hostelName}!" },
     employeeFaceAttendanceEnabled: { type: Boolean, default: true },
+    cashierStudentManageEnabled: { type: Boolean, default: false },
     employeeWorkSchedule: { type: employeeWorkScheduleSchema, default: () => ({}) },
   },
   { timestamps: true },

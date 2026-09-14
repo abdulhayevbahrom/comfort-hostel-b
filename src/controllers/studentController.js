@@ -7,10 +7,13 @@ import { StudentContract } from '../models/StudentContract.js'
 import { University } from '../models/University.js'
 import { faceIdCodeExists, isValidFaceIdCode, normalizeFaceIdCode } from '../utils/faceIdCode.js'
 import { ApiResponse } from '../utils/response.js'
-import { uploadImages } from '../utils/imgbb.js'
+import { deleteImage, uploadImages } from '../utils/imgbb.js'
+import { deletePrivateImage, privateImagePath, savePrivateImage } from '../utils/privateFileStorage.js'
 
 class StudentController {
   canReceivePayment = (employee) => ['cashier', 'head_cashier'].includes(employee?.role)
+
+  canViewPrivateDocuments = (employee) => ['manager', 'owner', 'admin', 'cashier', 'head_cashier'].includes(employee?.role)
 
   getReceivingCashSession = async (employee) => {
     if (!this.canReceivePayment(employee)) return null
@@ -30,22 +33,63 @@ class StudentController {
       if (!this.canReceivePayment(req.employee)) return ApiResponse.forbidden(res, 'Depozit to‘lovini faqat kassir yoki bosh kassir qabul qilishi mumkin')
       const cashSession = await this.getReceivingCashSession(req.employee)
       const paymentGroup = new mongoose.Types.ObjectId()
-      const parts = (Array.isArray(req.body.paymentParts) ? req.body.paymentParts : []).map((part) => ({ paymentGroup, method: part.method, amount: Number(part.amount), paidAt: part.paidAt ? new Date(part.paidAt) : null, receivedBy: req.employee._id, cashSession: cashSession?._id || null })).filter((part) => part.amount > 0)
+      const parts = (Array.isArray(req.body.paymentParts) ? req.body.paymentParts : []).map((part) => ({ paymentGroup, method: part.method, amount: Number(part.amount), paidAt: part.paidAt ? new Date(part.paidAt) : null, receivedBy: req.employee._id, cashSession: cashSession?._id || null, auditHistory: [{ action: 'created', performedBy: req.employee._id, after: { amount: Number(part.amount), method: part.method, note: 'Depozit to‘lovi' } }] })).filter((part) => part.amount > 0)
       if (!parts.length || parts.some((part) => !['cash', 'online', 'card', 'bank'].includes(part.method))) return ApiResponse.badRequest(res, 'Depozit to‘lov usullarini kiriting')
       if (parts.some((part) => !part.paidAt || Number.isNaN(part.paidAt.getTime()))) return ApiResponse.badRequest(res, 'Har bir depozit to‘lovi sanasini kiriting')
-      const paid = student.depositPayments?.length ? student.depositPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) : student.depositType === 'money' && student.depositReceivedAt ? Number(student.depositAmount || 0) : 0
+      const activeDeposits = (student.depositPayments || []).filter((payment) => payment.status !== 'cancelled' && !payment.cancelledAt)
+      const paid = activeDeposits.length ? activeDeposits.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) : student.depositType === 'money' && student.depositReceivedAt ? Number(student.depositAmount || 0) : 0
       const amount = parts.reduce((sum, part) => sum + part.amount, 0)
-      const balance = Math.max(0, Number(student.depositAmount || 700000) - paid)
+      const required = Math.max(Number(student.depositAmount || 0), 700000)
+      const balance = Math.max(0, required - paid)
       if (amount > balance) return ApiResponse.badRequest(res, `Maksimal depozit to‘lovi: ${balance.toLocaleString('uz-UZ')} so‘m`)
       student.depositPayments.push(...parts)
       student.depositType = 'money'
-      if (!student.depositAmount) student.depositAmount = 700000
+      if (!student.depositAmount || student.depositAmount < 700000) student.depositAmount = 700000
       if (!student.depositReceivedAt) student.depositReceivedAt = parts[0].paidAt
       student.depositPaymentMethod = student.depositPayments[0]?.method || parts[0].method
       await student.save()
       if (cashSession) req.app.get('io')?.emit('cash-sessions:changed', { action: 'deposit-created', cashierId: req.employee.id })
       this.emitChange(req, 'deposit-payment-created', student)
       return ApiResponse.created(res, { student, payments: parts, amount }, 'Depozit to‘lovi qabul qilindi')
+    } catch (error) { return next(error) }
+  }
+
+  cancelDepositPayment = async (req, res, next) => {
+    try {
+      if (!mongoose.isValidObjectId(req.params.id) || !mongoose.isValidObjectId(req.params.paymentId)) return ApiResponse.notFound(res, 'Depozit to‘lovi topilmadi')
+      const session = await mongoose.startSession()
+      let student
+      let deposit
+      try {
+        await session.withTransaction(async () => {
+          student = await Student.findById(req.params.id).session(session)
+          if (!student) throw Object.assign(new Error('Talaba topilmadi'), { statusCode: 404 })
+          deposit = student.depositPayments.id(req.params.paymentId)
+          if (!deposit) throw Object.assign(new Error('Depozit to‘lovi topilmadi'), { statusCode: 404 })
+          if (deposit.status === 'cancelled' || deposit.cancelledAt) throw Object.assign(new Error('Depozit to‘lovi avval bekor qilingan'), { statusCode: 400 })
+          deposit.status = 'cancelled'
+          deposit.cancelledAt = new Date()
+          deposit.cancelledBy = req.employee._id
+          deposit.auditHistory.push({ action: 'cancelled', performedBy: req.employee._id, before: { amount: deposit.amount, method: deposit.method, note: 'Depozit to‘lovi' } })
+          if (deposit.cashSession) {
+            const cashSession = await CashSession.findById(deposit.cashSession).session(session)
+            if (cashSession && cashSession.status !== 'open') {
+              const amount = Number(deposit.amount || 0)
+              cashSession.expectedAmount = Math.max(0, Number(cashSession.expectedAmount || 0) - amount)
+              cashSession.paymentCount = Math.max(0, Number(cashSession.paymentCount || 0) - 1)
+              if (cashSession.breakdown?.[deposit.method] !== undefined) cashSession.breakdown[deposit.method] = Math.max(0, Number(cashSession.breakdown[deposit.method] || 0) - amount)
+              if (cashSession.status === 'approved' && cashSession.receivedAmount !== null) cashSession.receivedAmount = Math.max(0, Number(cashSession.receivedAmount || 0) - amount)
+              await cashSession.save({ session })
+            }
+          }
+          await student.save({ session })
+        })
+      } finally { await session.endSession() }
+      await student.populate([{ path: 'depositPayments.receivedBy', select: 'firstname lastname role' }, { path: 'depositPayments.cancelledBy', select: 'firstname lastname role' }, { path: 'depositPayments.auditHistory.performedBy', select: 'firstname lastname role' }])
+      req.app.get('io')?.emit('payments:changed', { action: 'deposit-cancelled', studentId: student.id })
+      req.app.get('io')?.emit('students:changed', { action: 'deposit-cancelled', studentId: student.id })
+      req.app.get('io')?.emit('cash-sessions:changed', { action: 'deposit-cancelled', cashierId: req.employee.id })
+      return ApiResponse.ok(res, { student }, 'Depozit to‘lovi bekor qilindi')
     } catch (error) { return next(error) }
   }
 
@@ -326,11 +370,17 @@ class StudentController {
       if (blocked) return ApiResponse.conflict(res, `Bu shaxs qora ro‘yxatda: ${blocked.reason}`)
       const photoFile = req.files?.photo?.[0]
       const marriageCertificateFile = req.files?.marriageCertificate?.[0]
+      const passportFrontFile = req.files?.passportFront?.[0]
+      const passportBackFile = req.files?.passportBack?.[0]
       if (payload.gender === 'family' && !marriageCertificateFile) return ApiResponse.badRequest(res, 'Oila uchun ZAKS qog‘ozi rasmini yuklang')
       payload.photo = photoFile ? (await uploadImages([photoFile]))[0] : null
       payload.marriageCertificate = marriageCertificateFile ? (await uploadImages([marriageCertificateFile]))[0] : null
+      payload.passportImages = {
+        front: passportFrontFile ? await savePrivateImage(passportFrontFile, 'front') : null,
+        back: passportBackFile ? await savePrivateImage(passportBackFile, 'back') : null,
+      }
       const cashSession = await this.getReceivingCashSession(req.employee)
-      payload.depositPayments = payload.depositPayments.map((payment) => ({ ...payment, receivedBy: req.employee?._id || null, cashSession: cashSession?._id || null }))
+      payload.depositPayments = payload.depositPayments.map((payment) => ({ ...payment, receivedBy: req.employee?._id || null, cashSession: cashSession?._id || null, auditHistory: [{ action: 'created', performedBy: req.employee._id, after: { amount: payment.amount, method: payment.method, note: 'Depozit to‘lovi' } }] }))
       payload.depositPaymentMethod = payload.depositPayments[0]?.method || ''
       const student = await Student.create(payload)
       if (cashSession && payload.depositPayments.length) req.app.get('io')?.emit('cash-sessions:changed', { action: 'deposit-created', cashierId: req.employee.id })
@@ -356,12 +406,21 @@ class StudentController {
       if (payload.depositPayments.length && !this.canReceivePayment(req.employee) && !existingDepositPayments.length) return ApiResponse.forbidden(res, 'Depozit pulini kiritish uchun kassir yoki bosh kassir orqali to‘lov qabul qiling')
       const blocked = await this.findBlacklist(payload)
       if (blocked && blocked.sourceStudent?.toString() !== student.id) return ApiResponse.conflict(res, `Bu shaxs qora ro‘yxatda: ${blocked.reason}`)
+      const oldPhoto = student.photo ? student.photo.toJSON?.() || student.photo : null
+      const oldPassportFront = student.passportImages?.front ? student.passportImages.front.toJSON?.() || student.passportImages.front : null
+      const oldPassportBack = student.passportImages?.back ? student.passportImages.back.toJSON?.() || student.passportImages.back : null
       const photoFile = req.files?.photo?.[0]
       const marriageCertificateFile = req.files?.marriageCertificate?.[0]
+      const passportFrontFile = req.files?.passportFront?.[0]
+      const passportBackFile = req.files?.passportBack?.[0]
       if (payload.gender === 'family' && !marriageCertificateFile && !student.marriageCertificate) return ApiResponse.badRequest(res, 'Oila uchun ZAKS qog‘ozi rasmini yuklang')
       const uploaded = photoFile ? (await uploadImages([photoFile]))[0] : null
       payload.photo = req.body.removePhoto ? null : uploaded || student.photo || null
       payload.marriageCertificate = marriageCertificateFile ? (await uploadImages([marriageCertificateFile]))[0] : student.marriageCertificate || null
+      payload.passportImages = {
+        front: passportFrontFile ? await savePrivateImage(passportFrontFile, 'front') : req.body.removePassportFront ? null : student.passportImages?.front || null,
+        back: passportBackFile ? await savePrivateImage(passportBackFile, 'back') : req.body.removePassportBack ? null : student.passportImages?.back || null,
+      }
       // Talaba kartasini tahrirlash pul qabul qilish emas. Avval yozilgan
       // depozit cheklari va ularning kassa sessiyasi o‘zgarmaydi.
       if (existingDepositPayments.length) {
@@ -370,7 +429,7 @@ class StudentController {
         payload.depositPaymentMethod = student.depositPaymentMethod || existingDepositPayments[0]?.method || ''
       } else if (payload.depositPayments.length) {
         const cashSession = await this.getReceivingCashSession(req.employee)
-        payload.depositPayments = payload.depositPayments.map((payment) => ({ ...payment, receivedBy: req.employee._id, cashSession: cashSession._id }))
+        payload.depositPayments = payload.depositPayments.map((payment) => ({ ...payment, receivedBy: req.employee._id, cashSession: cashSession._id, auditHistory: [{ action: 'created', performedBy: req.employee._id, after: { amount: payment.amount, method: payment.method, note: 'Depozit to‘lovi' } }] }))
         payload.depositPaymentMethod = payload.depositPayments[0]?.method || ''
         req.app.get('io')?.emit('cash-sessions:changed', { action: 'deposit-created', cashierId: req.employee.id })
       } else {
@@ -379,6 +438,9 @@ class StudentController {
       }
       student.set(payload)
       await student.save()
+      if ((req.body.removePhoto || uploaded) && oldPhoto?.url) await deleteImage(oldPhoto).catch(() => {})
+      if (passportFrontFile || req.body.removePassportFront) await deletePrivateImage(oldPassportFront).catch(() => {})
+      if (passportBackFile || req.body.removePassportBack) await deletePrivateImage(oldPassportBack).catch(() => {})
       await this.syncBlacklist(student)
       await student.populate([{ path: 'university', select: 'name shortName' }, { path: 'faculty', select: 'name' }])
       this.emitChange(req, 'updated', student)
@@ -407,8 +469,28 @@ class StudentController {
       if (!mongoose.isValidObjectId(req.params.id)) return ApiResponse.notFound(res, 'Talaba topilmadi')
       const student = await Student.findByIdAndDelete(req.params.id)
       if (!student) return ApiResponse.notFound(res, 'Talaba topilmadi')
+      await Promise.all([
+        deleteImage(student.photo).catch(() => {}),
+        deletePrivateImage(student.passportImages?.front).catch(() => {}),
+        deletePrivateImage(student.passportImages?.back).catch(() => {}),
+      ])
       this.emitChange(req, 'deleted', student)
       return ApiResponse.ok(res, { studentId: student.id }, 'Talaba o‘chirildi')
+    } catch (error) { return next(error) }
+  }
+
+  passportImage = async (req, res, next) => {
+    try {
+      if (!this.canViewPrivateDocuments(req.employee)) return ApiResponse.forbidden(res, 'Pasport rasmini ko‘rish uchun ruxsat yo‘q')
+      if (!mongoose.isValidObjectId(req.params.id)) return ApiResponse.notFound(res, 'Talaba topilmadi')
+      const side = req.params.side === 'back' ? 'back' : req.params.side === 'front' ? 'front' : ''
+      if (!side) return ApiResponse.notFound(res, 'Pasport rasmi topilmadi')
+      const student = await Student.findById(req.params.id).select('passportImages')
+      const image = student?.passportImages?.[side]
+      const filePath = privateImagePath(image)
+      if (!filePath) return ApiResponse.notFound(res, 'Pasport rasmi topilmadi')
+      res.type(image.mimetype || 'image/jpeg')
+      return res.sendFile(filePath)
     } catch (error) { return next(error) }
   }
 }

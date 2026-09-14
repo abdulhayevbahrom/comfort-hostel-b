@@ -1,9 +1,22 @@
 import mongoose from 'mongoose'
 
 const photoSchema = new mongoose.Schema(
-  { url: String, displayUrl: String, thumbnailUrl: String },
+  { url: String, displayUrl: String, thumbnailUrl: String, deleteUrl: String },
   { _id: false },
 )
+
+const privateImageSchema = new mongoose.Schema(
+  { path: String, originalName: String, mimetype: String, size: Number },
+  { _id: false },
+)
+
+const depositAuditSchema = new mongoose.Schema({
+  action: { type: String, enum: ['created', 'updated', 'cancelled'], required: true },
+  performedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', required: true },
+  performedAt: { type: Date, default: Date.now },
+  before: { amount: Number, method: String, note: String },
+  after: { amount: Number, method: String, note: String },
+}, { _id: true })
 
 const depositPaymentSchema = new mongoose.Schema({
   paymentGroup: { type: mongoose.Schema.Types.ObjectId, default: null, index: true },
@@ -12,6 +25,10 @@ const depositPaymentSchema = new mongoose.Schema({
   paidAt: { type: Date, required: true },
   receivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', default: null },
   cashSession: { type: mongoose.Schema.Types.ObjectId, ref: 'CashSession', default: null, index: true },
+  status: { type: String, enum: ['active', 'cancelled'], default: 'active', index: true },
+  cancelledAt: { type: Date, default: null },
+  cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', default: null },
+  auditHistory: { type: [depositAuditSchema], default: [] },
 }, { timestamps: true })
 
 const studentSchema = new mongoose.Schema(
@@ -55,6 +72,10 @@ const studentSchema = new mongoose.Schema(
     disabilityStatus: { type: String, enum: ['none', 'has_disability'], default: 'none' },
     photo: { type: photoSchema, default: null },
     marriageCertificate: { type: photoSchema, default: null },
+    passportImages: {
+      front: { type: privateImageSchema, default: null },
+      back: { type: privateImageSchema, default: null },
+    },
     zaksSeries: { type: String, trim: true, uppercase: true, match: /^[A-Z]{2}$/ },
     zaksNumber: { type: String, trim: true, match: /^\d{7}$/ },
     jshr: { type: String, trim: true, match: /^\d{14}$/ },

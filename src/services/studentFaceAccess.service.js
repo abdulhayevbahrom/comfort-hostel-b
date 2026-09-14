@@ -74,8 +74,9 @@ async function activeContractAndDebt(student, occurredAt) {
   }).sort({ dueDate: 1 }) : []
   let depositDebt = 0
   if (!student.depositReturnedAt && ['none', 'money'].includes(student.depositType)) {
-    const required = student.depositType === 'none' ? 700000 : Number(student.depositAmount || 700000)
-    const paid = student.depositPayments?.length ? student.depositPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) : student.depositType === 'money' && student.depositReceivedAt ? Number(student.depositAmount || 0) : 0
+    const required = student.depositType === 'none' ? 700000 : Math.max(Number(student.depositAmount || 0), 700000)
+    const activeDeposits = (student.depositPayments || []).filter((payment) => payment.status !== 'cancelled' && !payment.cancelledAt)
+    const paid = activeDeposits.length ? activeDeposits.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) : student.depositType === 'money' && student.depositReceivedAt ? Number(student.depositAmount || 0) : 0
     depositDebt = Math.max(0, required - paid)
   }
   return {

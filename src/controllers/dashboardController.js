@@ -184,9 +184,10 @@ class DashboardController {
       todayReturnedDeposit.amount += legacyTodayReturnedRows[0]?.amount || 0
       todayReturnedDeposit.count += legacyTodayReturnedRows[0]?.count || 0
       const depositDebtSummary = depositStudents.reduce((summary, student) => {
-        const required = student.depositType === 'none' ? 700000 : Number(student.depositAmount || 700000)
-        const paid = student.depositPayments?.length
-          ? student.depositPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
+        const required = student.depositType === 'none' ? 700000 : Math.max(Number(student.depositAmount || 0), 700000)
+        const activeDeposits = (student.depositPayments || []).filter((payment) => payment.status !== 'cancelled' && !payment.cancelledAt)
+        const paid = activeDeposits.length
+          ? activeDeposits.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
           : student.depositType === 'money' && student.depositReceivedAt ? Number(student.depositAmount || 0) : 0
         const debt = Math.max(0, required - paid)
         if (debt > 0) { summary.amount += debt; summary.students += 1 }

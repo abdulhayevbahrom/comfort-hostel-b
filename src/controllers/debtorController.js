@@ -94,8 +94,9 @@ class DebtorController {
           : []
         const depositContractByStudent = new Map(depositContracts.map((contract) => [contract.student.toString(), contract]))
         for (const student of depositStudents) {
-          const required = student.depositType === 'none' ? 700000 : Number(student.depositAmount || 700000)
-          const paid = student.depositPayments?.length ? student.depositPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) : student.depositType === 'money' && student.depositReceivedAt ? Number(student.depositAmount || 0) : 0
+          const required = student.depositType === 'none' ? 700000 : Math.max(Number(student.depositAmount || 0), 700000)
+          const activeDeposits = (student.depositPayments || []).filter((payment) => payment.status !== 'cancelled' && !payment.cancelledAt)
+          const paid = activeDeposits.length ? activeDeposits.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) : student.depositType === 'money' && student.depositReceivedAt ? Number(student.depositAmount || 0) : 0
           depositRequiredAmount += required
           depositPaidAmount += Math.min(required, paid)
           depositPaidByStudent.set(student.id, Math.min(required, paid))
@@ -157,8 +158,9 @@ class DebtorController {
       const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
       let depositDebt = 0
       if (periodKey === currentKey && !student.depositReturnedAt && ['none', 'money'].includes(student.depositType)) {
-        const required = student.depositType === 'none' ? 700000 : Number(student.depositAmount || 700000)
-        const paid = student.depositPayments?.length ? student.depositPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) : student.depositType === 'money' && student.depositReceivedAt ? Number(student.depositAmount || 0) : 0
+        const required = student.depositType === 'none' ? 700000 : Math.max(Number(student.depositAmount || 0), 700000)
+        const activeDeposits = (student.depositPayments || []).filter((payment) => payment.status !== 'cancelled' && !payment.cancelledAt)
+        const paid = activeDeposits.length ? activeDeposits.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) : student.depositType === 'money' && student.depositReceivedAt ? Number(student.depositAmount || 0) : 0
         depositDebt = Math.max(0, required - paid)
       }
       if (!installments.length && depositDebt <= 0) return ApiResponse.badRequest(res, 'Tanlangan oy uchun qarzdorlik topilmadi')

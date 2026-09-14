@@ -9,9 +9,15 @@ async function uploadImage(file) {
   const response = await fetch(`${IMGBB_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, { method: 'POST', body })
   const result = await response.json()
   if (!response.ok || !result?.success) throw new Error(result?.error?.message || 'ImgBB’ga rasm yuklanmadi')
-  return { url: result.data.url, displayUrl: result.data.display_url || result.data.url, thumbnailUrl: result.data.thumb?.url || result.data.url }
+  return { url: result.data.url, displayUrl: result.data.display_url || result.data.url, thumbnailUrl: result.data.thumb?.url || result.data.url, deleteUrl: result.data.delete_url || '' }
 }
 
 export function uploadImages(files = []) {
   return Promise.all(files.map(uploadImage))
+}
+
+export async function deleteImage(image) {
+  if (!image?.deleteUrl) return false
+  const response = await fetch(image.deleteUrl, { method: 'GET' })
+  return response.ok
 }

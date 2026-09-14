@@ -72,6 +72,8 @@ class PaymentController {
         Student.find({ 'depositPayments.0': { $exists: true } })
           .select('fullName phone photo depositPayments')
           .populate('depositPayments.receivedBy', 'firstname lastname role')
+          .populate('depositPayments.cancelledBy', 'firstname lastname role')
+          .populate('depositPayments.auditHistory.performedBy', 'firstname lastname role')
           .lean(),
         period ? Promise.resolve(periodInstallments) : ContractInstallment.find({}).select('student amount paidAmount periodKey dueDate').lean(),
       ])
@@ -89,8 +91,11 @@ class PaymentController {
         payerType: 'Depozit',
         note: 'Depozit to‘lovi',
         receivedBy: deposit.receivedBy || null,
+        cancelledBy: deposit.cancelledBy || null,
+        auditHistory: deposit.auditHistory || [],
         createdAt: deposit.paidAt,
-        status: 'completed',
+        cancelledAt: deposit.cancelledAt || null,
+        status: deposit.status === 'cancelled' || deposit.cancelledAt ? 'cancelled' : 'completed',
       })))
       const needle = String(search).trim().toLowerCase()
       if (needle) payments = payments.filter((item) => `${item.student?.fullName || ''} ${item.student?.phone || ''} ${item.contract?.contractNumber || ''}`.toLowerCase().includes(needle))
@@ -117,7 +122,7 @@ class PaymentController {
       const dueStudentIds = new Set(dueInstallments.map((item) => item.student.toString()))
       const duePaidStudentIds = new Set([...dueInstallments.filter((item) => item.paidAmount > 0).map((item) => item.student.toString()), ...paidStudents])
       const waitingStudentIds = new Set(waitingInstallments.filter((item) => item.paidAmount < item.amount).map((item) => item.student.toString()))
-      const paymentCount = new Set(payments.map((payment) => `${payment.kind || 'contract'}:${payment.paymentGroup?.toString() || payment.id}`)).size
+      const paymentCount = new Set(activePayments.map((payment) => `${payment.kind || 'contract'}:${payment.paymentGroup?.toString() || payment.id}`)).size
       return ApiResponse.ok(res, { payments, summary: { billed, paid, debt, paidStudents: paidStudents.size, unpaidStudents: Math.max(0, dueStudentIds.size - duePaidStudentIds.size), waitingStudents: waitingStudentIds.size, studentCount: allStudents.size, count: paymentCount, period, isFuturePeriod } })
     } catch (error) { return next(error) }
   }
@@ -130,8 +135,10 @@ class PaymentController {
       installments.forEach((item) => { const key = item.contract.toString(); if (!byContract.has(key)) byContract.set(key, []); byContract.get(key).push(item) })
       const options = contracts.map((contract) => ({ ...contract, installments: byContract.get(contract._id.toString()) || [], balance: (byContract.get(contract._id.toString()) || []).reduce((sum, item) => sum + Math.max(0, item.amount - item.paidAmount), 0) })).filter((contract) => contract.status === 'active' || contract.balance > 0)
       const students = (await Student.find({ depositType: { $in: ['none', 'money'] }, depositReturnedAt: null }).select('fullName phone depositType depositAmount depositReceivedAt depositPaymentMethod depositPayments').sort({ fullName: 1 }).lean()).map((student) => {
-        const paid = student.depositPayments?.length ? student.depositPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) : student.depositType === 'money' && student.depositReceivedAt ? Number(student.depositAmount || 0) : 0
-        return { ...student, balance: Math.max(0, Number(student.depositAmount || 700000) - paid) }
+        const activeDeposits = (student.depositPayments || []).filter((payment) => payment.status !== 'cancelled' && !payment.cancelledAt)
+        const paid = activeDeposits.length ? activeDeposits.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) : student.depositType === 'money' && student.depositReceivedAt ? Number(student.depositAmount || 0) : 0
+        const required = Math.max(Number(student.depositAmount || 0), 700000)
+        return { ...student, depositAmount: required, balance: Math.max(0, required - paid) }
       }).filter((student) => student.balance > 0)
       return ApiResponse.ok(res, { contracts: options, students })
     } catch (error) { return next(error) }
@@ -195,12 +202,12 @@ class PaymentController {
       const contracts = await StudentContract.find({ student: req.params.studentId }).populate('room', 'roomNumber block').sort({ startDate: -1 }).lean()
       const installments = await ContractInstallment.find({ contract: { $in: contracts.map((item) => item._id) } }).sort({ dueDate: 1, periodIndex: 1 }).lean()
       const payments = await Payment.find({ student: req.params.studentId }).populate(paymentPopulate).sort({ createdAt: -1 })
-      const student = await Student.findById(req.params.studentId).select('fullName phone photo depositPayments').populate('depositPayments.receivedBy', 'firstname lastname role').lean()
+      const student = await Student.findById(req.params.studentId).select('fullName phone photo depositType depositAmount depositReturnedAt depositPayments').populate('depositPayments.receivedBy', 'firstname lastname role').populate('depositPayments.cancelledBy', 'firstname lastname role').populate('depositPayments.auditHistory.performedBy', 'firstname lastname role').lean()
       const depositPayments = (student?.depositPayments || []).map((deposit) => ({
         id: deposit._id.toString(), paymentGroup: deposit.paymentGroup?.toString() || null, kind: 'deposit', isDeposit: true,
         student: { id: student._id.toString(), fullName: student.fullName, phone: student.phone, photo: student.photo }, contract: null, allocations: [],
-        amount: Number(deposit.amount || 0), method: deposit.method, payerType: 'Depozit', note: 'Depozit to‘lovi', receivedBy: deposit.receivedBy || null,
-        createdAt: deposit.paidAt, status: 'completed',
+        amount: Number(deposit.amount || 0), method: deposit.method, payerType: 'Depozit', note: 'Depozit to‘lovi', receivedBy: deposit.receivedBy || null, cancelledBy: deposit.cancelledBy || null, auditHistory: deposit.auditHistory || [],
+        createdAt: deposit.paidAt, cancelledAt: deposit.cancelledAt || null, status: deposit.status === 'cancelled' || deposit.cancelledAt ? 'cancelled' : 'completed',
       }))
       payments.push(...depositPayments)
       payments.sort((first, second) => new Date(second.createdAt) - new Date(first.createdAt))
@@ -214,6 +221,9 @@ class PaymentController {
       })
       const total = activeInstallments.reduce((sum, item) => sum + item.amount, 0)
       const paid = activeInstallments.reduce((sum, item) => sum + item.paidAmount, 0)
+      const depositPaid = depositPayments.filter((payment) => payment.status !== 'cancelled' && !payment.cancelledAt).reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
+      const depositRequired = student && !student.depositReturnedAt && ['none', 'money'].includes(student.depositType) ? Math.max(Number(student.depositAmount || 0), 700000) : 0
+      const depositDebt = Math.max(0, depositRequired - depositPaid)
       const now = new Date()
       const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
       const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
@@ -223,7 +233,7 @@ class PaymentController {
       const overdue = activeInstallments.reduce((sum, item) => sum + (new Date(item.dueDate) < todayStart ? Math.max(0, item.amount - item.paidAmount) : 0), 0)
       const activePayments = payments.filter((payment) => !payment.cancelledAt && payment.status !== 'cancelled')
       const paymentCount = new Set(activePayments.map((payment) => `${payment.kind || 'contract'}:${payment.paymentGroup?.toString() || payment.id}`)).size
-      return ApiResponse.ok(res, { contracts, installments: sortedInstallments, payments, summary: { total, paid, debt, overdue, upcoming, paymentCount } })
+      return ApiResponse.ok(res, { contracts, installments: sortedInstallments, payments, summary: { total: total + depositRequired, paid: paid + Math.min(depositPaid, depositRequired), debt: debt + depositDebt, overdue, upcoming, depositDebt, paymentCount } })
     } catch (error) { return next(error) }
   }
 

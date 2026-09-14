@@ -29,6 +29,9 @@ class GeneralSettingController {
           organizationAddress: String(req.body.organizationAddress || '').trim(),
           receiptThankYou: String(req.body.receiptThankYou || '').trim(),
           employeeFaceAttendanceEnabled: req.body.employeeFaceAttendanceEnabled !== false,
+          cashierStudentManageEnabled: ['owner', 'admin'].includes(req.employee?.role)
+            ? req.body.cashierStudentManageEnabled === true
+            : current?.cashierStudentManageEnabled === true,
           employeeWorkSchedule: normalizeEmployeeSchedule(req.body.employeeWorkSchedule || current?.employeeWorkSchedule || {}),
           logo,
         },

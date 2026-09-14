@@ -24,7 +24,7 @@ const sumDepositsByMethod = async (cashSession) => {
   const rows = await Student.aggregate([
     { $match: { depositReturnedAt: null } },
     { $unwind: '$depositPayments' },
-    { $match: { 'depositPayments.cashSession': cashSession } },
+    { $match: { 'depositPayments.cashSession': cashSession, 'depositPayments.status': { $ne: 'cancelled' }, 'depositPayments.cancelledAt': null } },
     { $group: { _id: '$depositPayments.method', amount: { $sum: '$depositPayments.amount' }, count: { $sum: 1 } } },
   ])
   const breakdown = emptyBreakdown()
@@ -89,7 +89,7 @@ const sessionContributors = async (sessionId) => {
   ])
   let contributors = [
     ...payments.map((payment) => ({ sourceKey: `payment:${payment._id}`, sourceType: 'payment', student: payment.student?._id || null, studentName: payment.student?.fullName || 'Talaba', amount: Number(payment.amount || 0), method: payment.method, paidAt: payment.createdAt })),
-    ...students.flatMap((student) => (student.depositPayments || []).filter((payment) => payment.cashSession?.toString() === sessionId.toString()).map((payment) => ({ sourceKey: `deposit:${student._id}:${payment._id}`, sourceType: 'deposit', student: student._id, studentName: student.fullName, amount: Number(payment.amount || 0), method: payment.method, paidAt: payment.paidAt }))),
+    ...students.flatMap((student) => (student.depositPayments || []).filter((payment) => payment.cashSession?.toString() === sessionId.toString() && payment.status !== 'cancelled' && !payment.cancelledAt).map((payment) => ({ sourceKey: `deposit:${student._id}:${payment._id}`, sourceType: 'deposit', student: student._id, studentName: student.fullName, amount: Number(payment.amount || 0), method: payment.method, paidAt: payment.paidAt }))),
     ...incomingTransfers.flatMap((transfer) => transfer.contributors?.length ? transfer.contributors : methods.filter((method) => Number(transfer.breakdown?.[method] || 0) > 0).map((method) => ({ sourceKey: `transfer:${transfer._id}:${method}`, sourceType: 'transfer', student: null, studentName: 'Avvalgi kassa topshirig‘i', amount: Number(transfer.breakdown?.[method] || 0), method, paidAt: transfer.closedAt }))),
   ]
   const previousTransfers = await CashSession.find({ sourceSession: sessionId, status: { $in: ['pending', 'approved'] } }).select('contributors breakdown').sort({ closedAt: 1, createdAt: 1 }).lean()
