@@ -4,5 +4,6 @@ import { ownerOnly, requireAuth } from '../middleware/auth.js'
 
 export const debtorRouter = Router()
 debtorRouter.get('/', requireAuth, debtorController.list)
+debtorRouter.get('/:studentId/history', requireAuth, debtorController.history)
 debtorRouter.put('/:studentId/deadline', requireAuth, ownerOnly, debtorController.setDeadline)
 debtorRouter.post('/:studentId/sms', requireAuth, ownerOnly, debtorController.sendSms)

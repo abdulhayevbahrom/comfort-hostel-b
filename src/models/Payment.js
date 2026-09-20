@@ -23,6 +23,7 @@ const paymentSchema = new mongoose.Schema({
   payerType: { type: String, trim: true, maxlength: 150, default: '' },
   payerName: { type: String, trim: true, maxlength: 150, default: '' },
   note: { type: String, trim: true, maxlength: 500, default: '' },
+  receiptImage: { type: String, trim: true, default: '' },
   allocations: { type: [allocationSchema], default: [] },
   receivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', default: null, index: true },
   cashSession: { type: mongoose.Schema.Types.ObjectId, ref: 'CashSession', default: null, index: true },

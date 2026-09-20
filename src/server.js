@@ -39,8 +39,7 @@ const io = new Server(httpServer, {
 
 app.set('io', io)
 
-try {
-  await connectDatabase()
+async function runStartupMaintenance() {
   await normalizeStoredPhoneNumbers()
   const bedBackfill = await backfillContractBedNumbers()
   if (bedBackfill.updated) console.log(`${bedBackfill.updated} ta shartnomaga o‘rin raqami berildi`)
@@ -66,17 +65,24 @@ try {
   if (faceIdBackfill.updated) console.log(`FaceID kodlari berildi: ${faceIdBackfill.studentsUpdated} talaba, ${faceIdBackfill.employeesUpdated} xodim`)
   const movementBackfill = await backfillStudentMovements()
   if (movementBackfill.updated) console.log(`Talabalar kirish-chiqish tarixi tiklandi: ${movementBackfill.updated} ta event`)
+  await syncContractStatuses()
+  await createContractExpiryNotification(io)
+  await createDebtorDeadlineNotification(io)
+}
+
+try {
+  await connectDatabase()
   const bootstrapResult = await bootstrapInitialOwner()
   if (bootstrapResult.created) {
     console.log(`Dastlabki owner yaratildi: ${bootstrapResult.employee.fullName} (${bootstrapResult.employee.login})`)
   }
-  await syncContractStatuses()
-  await createContractExpiryNotification(io)
-  await createDebtorDeadlineNotification(io)
-  scheduleDailyContractSync(io)
-  startFaceAccessSmsWorker({ io }).catch((error) => console.error(`FaceID SMS worker ishga tushmadi: ${error.message}`))
-  scheduleEmployeeExitReconciliation()
-  httpServer.listen(port, () => console.log(`API va WebSocket http://localhost:${port} manzilida ishlamoqda`))
+  httpServer.listen(port, () => {
+    console.log(`API va WebSocket http://localhost:${port} manzilida ishlamoqda`)
+    startFaceAccessSmsWorker({ io }).catch((error) => console.error(`FaceID SMS worker ishga tushmadi: ${error.message}`))
+    scheduleEmployeeExitReconciliation()
+    scheduleDailyContractSync(io)
+    runStartupMaintenance().catch((error) => console.error(`Server xizmat ishlarida xatolik: ${error.message}`))
+  })
 } catch (error) {
   console.error(`Server ishga tushmadi: ${error.message}`)
   process.exit(1)

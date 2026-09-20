@@ -3,3 +3,4 @@ node_modules/
 .DS_Store
 ._*
 npm-debug.log*
+private_uploads/

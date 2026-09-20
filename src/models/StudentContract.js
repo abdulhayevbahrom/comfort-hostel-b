@@ -6,6 +6,7 @@ const studentContractSchema = new mongoose.Schema(
     room: { type: mongoose.Schema.Types.ObjectId, ref: 'Room', required: true, index: true },
     bedNumber: { type: Number, required: true, min: 1 },
     contractNumber: { type: String, required: true, trim: true, maxlength: 60 },
+    contractDate: { type: Date, default: null },
     startDate: { type: Date, required: true },
     endDate: { type: Date, required: true },
     paymentType: { type: String, enum: ['daily', 'monthly'], default: 'monthly' },

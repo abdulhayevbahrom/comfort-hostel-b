@@ -22,6 +22,7 @@ const depositPaymentSchema = new mongoose.Schema({
   paymentGroup: { type: mongoose.Schema.Types.ObjectId, default: null, index: true },
   amount: { type: Number, required: true, min: 1 },
   method: { type: String, enum: ['cash', 'online', 'card', 'bank'], required: true },
+  receiptImage: { type: String, trim: true, default: '' },
   paidAt: { type: Date, required: true },
   receivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', default: null },
   cashSession: { type: mongoose.Schema.Types.ObjectId, ref: 'CashSession', default: null, index: true },

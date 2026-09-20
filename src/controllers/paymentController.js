@@ -7,6 +7,7 @@ import { Employee } from '../models/Employee.js'
 import { Notification } from '../models/Notification.js'
 import { Student } from '../models/Student.js'
 import { ApiResponse } from '../utils/response.js'
+import { isReceiptImageReference } from '../utils/paymentReceiptStorage.js'
 
 const paymentPopulate = [
   { path: 'student', select: 'fullName phone photo' },
@@ -88,6 +89,7 @@ class PaymentController {
         allocations: [],
         amount: Number(deposit.amount || 0),
         method: deposit.method,
+        receiptImage: deposit.receiptImage || '',
         payerType: 'Depozit',
         note: 'Depozit to‘lovi',
         receivedBy: deposit.receivedBy || null,
@@ -206,7 +208,7 @@ class PaymentController {
       const depositPayments = (student?.depositPayments || []).map((deposit) => ({
         id: deposit._id.toString(), paymentGroup: deposit.paymentGroup?.toString() || null, kind: 'deposit', isDeposit: true,
         student: { id: student._id.toString(), fullName: student.fullName, phone: student.phone, photo: student.photo }, contract: null, allocations: [],
-        amount: Number(deposit.amount || 0), method: deposit.method, payerType: 'Depozit', note: 'Depozit to‘lovi', receivedBy: deposit.receivedBy || null, cancelledBy: deposit.cancelledBy || null, auditHistory: deposit.auditHistory || [],
+        amount: Number(deposit.amount || 0), method: deposit.method, receiptImage: deposit.receiptImage || '', payerType: 'Depozit', note: 'Depozit to‘lovi', receivedBy: deposit.receivedBy || null, cancelledBy: deposit.cancelledBy || null, auditHistory: deposit.auditHistory || [],
         createdAt: deposit.paidAt, cancelledAt: deposit.cancelledAt || null, status: deposit.status === 'cancelled' || deposit.cancelledAt ? 'cancelled' : 'completed',
       }))
       payments.push(...depositPayments)
@@ -241,13 +243,14 @@ class PaymentController {
     try {
       const { contract: contractId, installment: installmentId, method, payerType, note = '' } = req.body
       const inputParts = Array.isArray(req.body.paymentParts) ? req.body.paymentParts : []
-      const paymentParts = inputParts.length ? inputParts.map((part) => ({ method: part.method, amount: Number(part.amount), paidAt: part.paidAt ? new Date(part.paidAt) : null })).filter((part) => part.amount > 0) : [{ method, amount: Number(req.body.amount), paidAt: req.body.paidAt ? new Date(req.body.paidAt) : new Date() }]
+      const paymentParts = inputParts.length ? inputParts.map((part) => ({ method: part.method, amount: Number(part.amount), paidAt: part.paidAt ? new Date(part.paidAt) : null, receiptImage: part.receiptImage || '' })).filter((part) => part.amount > 0) : [{ method, amount: Number(req.body.amount), paidAt: req.body.paidAt ? new Date(req.body.paidAt) : new Date(), receiptImage: req.body.receiptImage || '' }]
       const amount = paymentParts.reduce((sum, part) => sum + part.amount, 0)
       if (!mongoose.isValidObjectId(contractId)) return ApiResponse.badRequest(res, 'Shartnomani tanlang')
       if (!mongoose.isValidObjectId(installmentId)) return ApiResponse.badRequest(res, 'To‘lov oyini tanlang')
       if (!Number.isFinite(amount) || amount <= 0) return ApiResponse.badRequest(res, 'To‘lov summasini kiriting')
       if (!paymentParts.length || paymentParts.some((part) => !['cash', 'card', 'bank', 'online'].includes(part.method))) return ApiResponse.badRequest(res, 'To‘lov usullarini kiriting')
       if (paymentParts.some((part) => !part.paidAt || Number.isNaN(part.paidAt.getTime()))) return ApiResponse.badRequest(res, 'Har bir to‘lov usuli sanasini kiriting')
+      if (paymentParts.some((part) => !isReceiptImageReference(part.receiptImage))) return ApiResponse.badRequest(res, 'Kvitansiya rasmi manzili noto‘g‘ri')
       if (!String(payerType || '').trim()) return ApiResponse.badRequest(res, 'To‘lovni kim qilganini kiriting')
       const cashRole = ['cashier', 'head_cashier'].includes(req.employee.role)
       const fundHolder = cashRole ? 'cashier' : 'organization'
@@ -275,7 +278,7 @@ class PaymentController {
             )
           }
           const paymentGroup = new mongoose.Types.ObjectId()
-          payments = await Payment.create(paymentParts.map((part) => ({ student: contract.student, contract: contract._id, paymentGroup, amount: part.amount, method: part.method, fundHolder, payerType, note, receivedBy: req.employee._id, cashSession: cashSession?._id || null, allocations: [{ installment: installment._id, amount: part.amount }], createdAt: part.paidAt, updatedAt: part.paidAt, auditHistory: [{ action: 'created', performedBy: req.employee._id, after: { amount: part.amount, method: part.method, payerType, note } }] })), { session, ordered: true })
+          payments = await Payment.create(paymentParts.map((part) => ({ student: contract.student, contract: contract._id, paymentGroup, amount: part.amount, method: part.method, receiptImage: part.receiptImage, fundHolder, payerType, note, receivedBy: req.employee._id, cashSession: cashSession?._id || null, allocations: [{ installment: installment._id, amount: part.amount }], createdAt: part.paidAt, updatedAt: part.paidAt, auditHistory: [{ action: 'created', performedBy: req.employee._id, after: { amount: part.amount, method: part.method, payerType, note } }] })), { session, ordered: true })
         })
       } finally { await session.endSession() }
       await Promise.all(payments.map((payment) => payment.populate(paymentPopulate)))

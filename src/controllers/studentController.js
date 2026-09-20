@@ -9,6 +9,7 @@ import { faceIdCodeExists, isValidFaceIdCode, normalizeFaceIdCode } from '../uti
 import { ApiResponse } from '../utils/response.js'
 import { deleteImage, uploadImages } from '../utils/imgbb.js'
 import { deletePrivateImage, privateImagePath, savePrivateImage } from '../utils/privateFileStorage.js'
+import { isReceiptImageReference } from '../utils/paymentReceiptStorage.js'
 
 const money = (value) => Number(value || 0).toLocaleString('uz-UZ')
 const formatAuditDate = (value) => {
@@ -86,9 +87,10 @@ class StudentController {
       if (!this.canReceivePayment(req.employee)) return ApiResponse.forbidden(res, 'Depozit to‘lovini faqat kassir yoki bosh kassir qabul qilishi mumkin')
       const cashSession = await this.getReceivingCashSession(req.employee)
       const paymentGroup = new mongoose.Types.ObjectId()
-      const parts = (Array.isArray(req.body.paymentParts) ? req.body.paymentParts : []).map((part) => ({ paymentGroup, method: part.method, amount: Number(part.amount), paidAt: part.paidAt ? new Date(part.paidAt) : null, receivedBy: req.employee._id, cashSession: cashSession?._id || null, auditHistory: [{ action: 'created', performedBy: req.employee._id, after: { amount: Number(part.amount), method: part.method, note: 'Depozit to‘lovi' } }] })).filter((part) => part.amount > 0)
+      const parts = (Array.isArray(req.body.paymentParts) ? req.body.paymentParts : []).map((part) => ({ paymentGroup, method: part.method, amount: Number(part.amount), paidAt: part.paidAt ? new Date(part.paidAt) : null, receiptImage: part.receiptImage || '', receivedBy: req.employee._id, cashSession: cashSession?._id || null, auditHistory: [{ action: 'created', performedBy: req.employee._id, after: { amount: Number(part.amount), method: part.method, note: 'Depozit to‘lovi' } }] })).filter((part) => part.amount > 0)
       if (!parts.length || parts.some((part) => !['cash', 'online', 'card', 'bank'].includes(part.method))) return ApiResponse.badRequest(res, 'Depozit to‘lov usullarini kiriting')
       if (parts.some((part) => !part.paidAt || Number.isNaN(part.paidAt.getTime()))) return ApiResponse.badRequest(res, 'Har bir depozit to‘lovi sanasini kiriting')
+      if (parts.some((part) => !isReceiptImageReference(part.receiptImage))) return ApiResponse.badRequest(res, 'Kvitansiya rasmi manzili noto‘g‘ri')
       const activeDeposits = (student.depositPayments || []).filter((payment) => payment.status !== 'cancelled' && !payment.cancelledAt)
       const paid = activeDeposits.length ? activeDeposits.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) : student.depositType === 'money' && student.depositReceivedAt ? Number(student.depositAmount || 0) : 0
       const amount = parts.reduce((sum, part) => sum + part.amount, 0)

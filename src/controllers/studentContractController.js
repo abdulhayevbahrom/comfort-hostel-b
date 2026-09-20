@@ -27,6 +27,7 @@ const contractAuditFields = [
   ["room", "Xona"],
   ["bedNumber", "Joy raqami"],
   ["contractNumber", "Shartnoma raqami"],
+  ["contractDate", "Shartnoma sanasi", formatAuditDate],
   ["startDate", "Boshlanish sanasi", formatAuditDate],
   ["endDate", "Tugash sanasi", formatAuditDate],
   ["paymentType", "To‘lov turi"],
@@ -37,12 +38,13 @@ const contractAuditFields = [
 ];
 
 class StudentContractController {
-  cleanPayload(body) {
+  cleanPayload(body, fallbackContractDate = new Date()) {
     const payload = {
       student: body.student,
       room: body.room,
       bedNumber: Number(body.bedNumber),
       contractNumber: String(body.contractNumber || "").trim(),
+      contractDate: body.contractDate || fallbackContractDate,
       startDate: body.startDate,
       endDate: body.endDate,
       paymentType: body.paymentType || "monthly",
@@ -280,7 +282,7 @@ class StudentContractController {
       }, { total: 0, active: 0, completed: 0, cancelled: 0, amount: 0 });
       summary.amount = currentMonthRows[0]?.amount || 0;
       const contracts = await StudentContract.find(filter)
-        .populate({ path: "student", select: "fullName phone fatherPhone motherPhone photo university faculty course gender hasTaxContract taxContractType", populate: [{ path: "university", select: "name shortName" }, { path: "faculty", select: "name" }] })
+        .populate({ path: "student", select: "fullName phone fatherPhone motherPhone photo university faculty course gender hasTaxContract taxContractType faceIdCode", populate: [{ path: "university", select: "name shortName" }, { path: "faculty", select: "name" }] })
         .populate("room", "roomNumber block floor")
         .sort({ createdAt: -1 });
       const search = String(req.query.search || "").trim().toLowerCase();
@@ -312,6 +314,8 @@ class StudentContractController {
     try {
       const payload = this.cleanPayload(req.body);
       payload.status = "active";
+      if (Number.isNaN(new Date(payload.contractDate).getTime()))
+        return ApiResponse.badRequest(res, "Shartnoma sanasini to‘g‘ri kiriting");
       if (!Number.isFinite(payload.paymentAmount) || payload.paymentAmount <= 0)
         return ApiResponse.badRequest(res, "To‘lov summasi 0 dan katta bo‘lishi kerak");
       if (!mongoose.isValidObjectId(payload.student))
@@ -338,7 +342,9 @@ class StudentContractController {
         return ApiResponse.notFound(res, "Shartnoma topilmadi");
       const existing = await StudentContract.findById(req.params.id);
       if (!existing) return ApiResponse.notFound(res, "Shartnoma topilmadi");
-      const payload = this.cleanPayload(req.body);
+      const payload = this.cleanPayload(req.body, existing.contractDate || existing.createdAt);
+      if (Number.isNaN(new Date(payload.contractDate).getTime()))
+        return ApiResponse.badRequest(res, "Shartnoma sanasini to‘g‘ri kiriting");
       if (!Number.isFinite(payload.paymentAmount) || payload.paymentAmount <= 0)
         return ApiResponse.badRequest(res, "To‘lov summasi 0 dan katta bo‘lishi kerak");
       if (existing.status === "completed")
