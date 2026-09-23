@@ -29,7 +29,7 @@ const employeeWorkScheduleSchema = new mongoose.Schema({
 const generalSettingSchema = new mongoose.Schema(
   {
     key: { type: String, unique: true, default: 'general' },
-    hostelName: { type: String, required: true, trim: true, maxlength: 120, default: 'TizimPlus Hostel' },
+    hostelName: { type: String, required: true, trim: true, maxlength: 120, default: 'Comfort Hostel' },
     organizationPhone: { type: String, trim: true, match: /^\d{9}$/, default: '' },
     organizationAddress: { type: String, trim: true, maxlength: 300, default: '' },
     logo: { type: imageSchema, default: null },

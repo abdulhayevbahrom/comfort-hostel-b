@@ -117,7 +117,29 @@ class DebtorController {
       const paidStudentCount = [...paidByStudent.values()].filter((amount) => amount > 0).length
       const noPaymentStudentCount = [...paidByStudent.values()].filter((amount) => amount <= 0).length
       const summary = { debtorCount: isFuturePeriod ? 0 : debtors.length, waitingCount: isFuturePeriod ? debtors.length : 0, totalDebt: isFuturePeriod ? 0 : debtors.reduce((sum, item) => sum + item.totalDebt, 0), waitingAmount, scheduledAmount, paidAmount, paidStudentCount, noPaymentStudentCount, overdueDebt: debtors.reduce((sum, item) => sum + item.overdueDebt, 0), partialCount: debtors.filter((item) => item.debtStatus === 'partial').length, unpaidCount: debtors.filter((item) => item.debtStatus === 'unpaid').length }
-      return ApiResponse.ok(res, { debtors, summary, selectedPeriod: requestedPeriod, currentPeriod: currentKey, isFuturePeriod })
+      const search = String(req.query.search || '').trim().toLocaleLowerCase('uz-UZ')
+      const status = ['overdue', 'partial', 'unpaid'].includes(String(req.query.status)) ? String(req.query.status) : 'all'
+      const filteredDebtors = debtors.filter((item) => {
+        const searchable = [
+          item.student?.fullName,
+          item.student?.phone,
+          item.student?.fatherPhone,
+          item.student?.motherPhone,
+          item.student?.university?.name,
+          item.student?.faculty?.name,
+          ...(item.contracts || []).flatMap((contract) => [contract.contractNumber, contract.room?.block, contract.room?.roomNumber]),
+        ].filter(Boolean).join(' ').toLocaleLowerCase('uz-UZ')
+        const statusMatches = status === 'all' || (status === 'overdue' ? item.overdueDebt > 0 : item.debtStatus === status)
+        return statusMatches && (!search || searchable.includes(search))
+      })
+      const returnAll = String(req.query.all || '') === 'true'
+      const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 25))
+      const total = filteredDebtors.length
+      const totalPages = Math.max(1, Math.ceil(total / limit))
+      const requestedPage = Math.max(1, Number.parseInt(req.query.page, 10) || 1)
+      const page = Math.min(requestedPage, totalPages)
+      const rows = returnAll ? filteredDebtors : filteredDebtors.slice((page - 1) * limit, page * limit)
+      return ApiResponse.ok(res, { debtors: rows, summary, selectedPeriod: requestedPeriod, currentPeriod: currentKey, isFuturePeriod, pagination: { page: returnAll ? 1 : page, limit: returnAll ? total : limit, total, totalPages: returnAll ? 1 : totalPages } })
     } catch (error) { return next(error) }
   }
 

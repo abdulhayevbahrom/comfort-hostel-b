@@ -110,16 +110,17 @@ class CashSessionController {
     try {
       const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || '')) ? String(req.query.date) : ''
       const historyDateFilter = dateKey ? { closedAt: { $gte: new Date(`${dateKey}T00:00:00`), $lte: new Date(`${dateKey}T23:59:59.999`) } } : {}
+      const historyLimit = String(req.query.all || '') === 'true' ? 0 : 30
       if (['cashier', 'head_cashier'].includes(req.employee.role)) {
         const openSession = await CashSession.findOne({ cashier: req.employee._id, status: 'open' })
         const open = await openSessionBalance(openSession)
         const sessions = await CashSession.find({ cashier: req.employee._id, status: { $ne: 'open' }, ...historyDateFilter })
-          .populate('reviewedBy', 'firstname lastname').sort({ closedAt: -1 }).limit(30)
+          .populate('reviewedBy', 'firstname lastname').sort({ closedAt: -1 }).limit(historyLimit)
         const pendingAmount = sessions.filter((item) => item.status === 'pending').reduce((sum, item) => sum + item.expectedAmount, 0)
         if (req.employee.role === 'cashier') return ApiResponse.ok(res, { role: 'cashier', open: { id: openSession?.id || null, ...open }, pendingAmount, sessions })
         const [incomingSessions, reviewedIncoming] = await Promise.all([
           CashSession.find({ transferStage: 'cashier_to_head', status: 'pending' }).populate('cashier', 'firstname lastname position').sort({ closedAt: 1 }),
-          CashSession.find({ transferStage: 'cashier_to_head', status: { $in: ['approved', 'rejected'] }, reviewedBy: req.employee._id, ...historyDateFilter }).populate('cashier', 'firstname lastname position').sort({ reviewedAt: -1 }).limit(30),
+          CashSession.find({ transferStage: 'cashier_to_head', status: { $in: ['approved', 'rejected'] }, reviewedBy: req.employee._id, ...historyDateFilter }).populate('cashier', 'firstname lastname position').sort({ reviewedAt: -1 }).limit(historyLimit),
         ])
         return ApiResponse.ok(res, { role: 'head_cashier', open: { id: openSession?.id || null, ...open }, pendingAmount, sessions, pendingSessions: incomingSessions, recentIncoming: reviewedIncoming })
       }
@@ -127,7 +128,7 @@ class CashSessionController {
       if (!['owner', 'admin'].includes(req.employee.role)) return ApiResponse.forbidden(res, 'Kassa faqat kassir va owner uchun ochiq')
       const [pendingSessions, recentSessions, organizationPayments, approvedTransfers, openSessions, depositRows, returnedDepositRows, legacyDepositRows, legacyReturnedDepositRows] = await Promise.all([
         CashSession.find({ status: 'pending', $or: [{ transferStage: 'head_to_owner' }, { transferStage: null }] }).populate('cashier', 'firstname lastname position role').sort({ closedAt: 1 }),
-        CashSession.find({ status: { $in: ['approved', 'rejected'] }, $or: [{ transferStage: 'head_to_owner' }, { transferStage: null }], ...historyDateFilter }).populate('cashier', 'firstname lastname position role').populate('reviewedBy', 'firstname lastname').sort({ reviewedAt: -1 }).limit(30),
+        CashSession.find({ status: { $in: ['approved', 'rejected'] }, $or: [{ transferStage: 'head_to_owner' }, { transferStage: null }], ...historyDateFilter }).populate('cashier', 'firstname lastname position role').populate('reviewedBy', 'firstname lastname').sort({ reviewedAt: -1 }).limit(historyLimit),
         sumPaymentsByMethod({ $or: [{ fundHolder: 'organization' }, { fundHolder: { $exists: false }, cashSession: null }] }),
         CashSession.find({ status: 'approved', $or: [{ transferStage: 'head_to_owner' }, { transferStage: null }] }).select('sourceSession transferStage breakdown expectedAmount receivedAmount').lean(),
         CashSession.find({ status: 'open' }).populate('cashier', 'firstname lastname position'),

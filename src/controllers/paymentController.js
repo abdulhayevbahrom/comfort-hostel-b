@@ -125,7 +125,22 @@ class PaymentController {
       const duePaidStudentIds = new Set([...dueInstallments.filter((item) => item.paidAmount > 0).map((item) => item.student.toString()), ...paidStudents])
       const waitingStudentIds = new Set(waitingInstallments.filter((item) => item.paidAmount < item.amount).map((item) => item.student.toString()))
       const paymentCount = new Set(activePayments.map((payment) => `${payment.kind || 'contract'}:${payment.paymentGroup?.toString() || payment.id}`)).size
-      return ApiResponse.ok(res, { payments, summary: { billed, paid, debt, paidStudents: paidStudents.size, unpaidStudents: Math.max(0, dueStudentIds.size - duePaidStudentIds.size), waitingStudents: waitingStudentIds.size, studentCount: allStudents.size, count: paymentCount, period, isFuturePeriod } })
+      const groupedPayments = new Map()
+      for (const payment of payments) {
+        const groupKey = `${payment.kind || 'contract'}:${payment.paymentGroup?.toString() || payment.id}`
+        if (!groupedPayments.has(groupKey)) groupedPayments.set(groupKey, [])
+        groupedPayments.get(groupKey).push(payment)
+      }
+      const paymentGroups = [...groupedPayments.values()]
+      const returnAll = String(req.query.all || '') === 'true'
+      const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 25))
+      const total = paymentGroups.length
+      const totalPages = Math.max(1, Math.ceil(total / limit))
+      const requestedPage = Math.max(1, Number.parseInt(req.query.page, 10) || 1)
+      const page = Math.min(requestedPage, totalPages)
+      const selectedGroups = returnAll ? paymentGroups : paymentGroups.slice((page - 1) * limit, page * limit)
+      const paginatedPayments = selectedGroups.flat()
+      return ApiResponse.ok(res, { payments: paginatedPayments, summary: { billed, paid, debt, paidStudents: paidStudents.size, unpaidStudents: Math.max(0, dueStudentIds.size - duePaidStudentIds.size), waitingStudents: waitingStudentIds.size, studentCount: allStudents.size, count: paymentCount, period, isFuturePeriod }, pagination: { page: returnAll ? 1 : page, limit: returnAll ? total : limit, total, totalPages: returnAll ? 1 : totalPages } })
     } catch (error) { return next(error) }
   }
 
